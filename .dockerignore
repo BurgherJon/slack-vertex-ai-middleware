@@ -1,0 +1,59 @@
+# Exclude files from Docker build context
+
+# Environment variables and secrets
+.env
+.env.*
+*.json
+!.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# Docs and plans
+docs/
+*.md
+LICENSE
+
+# Scripts
+scripts/
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+*.log
+logs/

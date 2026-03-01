@@ -1,0 +1,24 @@
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+
+# Validation and settings
+pydantic==2.10.0
+pydantic-settings==2.6.0
+
+# Google Cloud
+google-cloud-firestore==2.23.0
+google-cloud-aiplatform==1.112.0
+cloudpickle==3.1.2
+google-cloud-trace==1.18.0
+google-cloud-logging==3.13.0
+opentelemetry-sdk==1.39.1
+opentelemetry-exporter-gcp-trace==1.11.0
+
+# Slack
+slack-sdk==3.33.0
+aiohttp==3.13.3
+
+# Utilities
+httpx==0.28.0
+python-dotenv==1.0.1

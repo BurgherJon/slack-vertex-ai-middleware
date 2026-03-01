@@ -1,0 +1,48 @@
+# Google Cloud Build configuration for deploying to Cloud Run
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:latest'
+      - '.'
+
+  # Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:$COMMIT_SHA'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:latest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'slack-vertex-middleware'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=production,GCP_LOCATION=us-central1'
+      - '--set-secrets'
+      - 'SLACK_SIGNING_SECRET=slack-signing-secret:latest'
+
+images:
+  - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
