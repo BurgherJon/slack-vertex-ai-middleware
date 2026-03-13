@@ -90,6 +90,22 @@ Common issues and solutions for the Slack to Vertex AI middleware.
    curl http://localhost:4040/api/tunnels
    ```
 
+### Bot responds multiple times to a single message
+
+**Symptoms**: Sending one message to the bot produces 2-3 identical (or similar) responses. Google Cloud logs show multiple separate Vertex AI sessions being created for the same message.
+
+**Root Cause**: Slack retries event delivery if the webhook doesn't respond quickly enough (within ~3 seconds). Each retry is processed as a new event, creating a new Vertex AI session and sending another response.
+
+**Solution**: The middleware handles this by checking for the `X-Slack-Retry-Num` header and immediately acknowledging retries without reprocessing. If you're seeing this issue, ensure your deployed version includes this retry handling in `app/api/v1/slack_events.py`.
+
+**How to verify**: Check Cloud Run logs for entries like:
+```
+Acknowledging Slack retry #1 (reason: http_timeout)
+```
+If you don't see these log lines, your deployed version may be outdated. Redeploy the middleware.
+
+---
+
 ### "Invalid signature" errors in logs
 
 **Symptoms**: Middleware rejects Slack requests with 401
