@@ -41,6 +41,15 @@ async def slack_events(
     """
     settings = get_settings()
 
+    # Acknowledge Slack retries immediately to prevent duplicate processing.
+    # Slack retries events (up to 3 times) if the webhook doesn't respond
+    # quickly enough. These retries carry the X-Slack-Retry-Num header.
+    retry_num = request.headers.get("X-Slack-Retry-Num")
+    if retry_num is not None:
+        retry_reason = request.headers.get("X-Slack-Retry-Reason", "unknown")
+        logger.info(f"Acknowledging Slack retry #{retry_num} (reason: {retry_reason})")
+        return JSONResponse(content={"ok": True})
+
     # Get request headers
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     signature = request.headers.get("X-Slack-Signature", "")
