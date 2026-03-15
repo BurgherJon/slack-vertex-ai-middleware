@@ -24,8 +24,13 @@ class Settings(BaseSettings):
     # A new Vertex AI session will be created after expiry
     session_timeout_minutes: int = 30
 
-    # Slack
+    # Slack (comma-separated list to support multiple Slack apps)
     slack_signing_secret: str
+
+    @property
+    def slack_signing_secrets(self) -> list[str]:
+        """Parse SLACK_SIGNING_SECRET as a comma-separated list."""
+        return [s.strip() for s in self.slack_signing_secret.split(",") if s.strip()]
 
     # API settings
     api_v1_prefix: str = "/api/v1"

@@ -81,8 +81,10 @@ Common issues and solutions for the Slack to Vertex AI middleware.
    ```
 
 2. **Check signing secret**:
-   - Verify `.env` has correct `SLACK_SIGNING_SECRET`
-   - Must match: https://api.slack.com/apps → Your app → Basic Information
+   - Verify `.env` `SLACK_SIGNING_SECRET` includes your bot's signing secret
+   - Multiple secrets are comma-separated (one per Slack app)
+   - The new bot's secret must be added **before** configuring Event Subscriptions
+   - Find each secret at: https://api.slack.com/apps → Your app → Basic Information
 
 3. **For ngrok**: Ensure tunnel is active
    ```bash
@@ -112,11 +114,11 @@ If you don't see these log lines, your deployed version may be outdated. Redeplo
 
 **Solutions**:
 
-1. **Verify signing secret matches**:
+1. **Verify signing secret is included**:
    ```bash
    grep SLACK_SIGNING_SECRET .env
    ```
-   Compare with Slack app settings
+   `SLACK_SIGNING_SECRET` is comma-separated (one per Slack app). Ensure the secret for the bot receiving the error is in the list.
 
 2. **Check system time** (for replay attack prevention):
    ```bash

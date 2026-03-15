@@ -67,18 +67,23 @@ async def slack_events(
     body = await request.body()
     body_str = body.decode("utf-8")
 
-    # Verify Slack request signature
+    # Verify Slack request signature against all configured signing secrets
     sig_basestring = f"v0:{timestamp}:{body_str}"
-    computed_signature = (
-        "v0="
-        + hmac.new(
-            settings.slack_signing_secret.encode(),
-            sig_basestring.encode(),
-            hashlib.sha256,
-        ).hexdigest()
-    )
+    signature_valid = False
+    for secret in settings.slack_signing_secrets:
+        computed_signature = (
+            "v0="
+            + hmac.new(
+                secret.encode(),
+                sig_basestring.encode(),
+                hashlib.sha256,
+            ).hexdigest()
+        )
+        if hmac.compare_digest(computed_signature, signature):
+            signature_valid = True
+            break
 
-    if not hmac.compare_digest(computed_signature, signature):
+    if not signature_valid:
         logger.warning("Invalid Slack signature")
         raise HTTPException(status_code=401, detail="Invalid signature")
 

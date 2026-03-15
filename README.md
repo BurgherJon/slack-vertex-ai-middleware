@@ -279,7 +279,7 @@ gcloud run services describe slack-vertex-middleware \
 |----------|----------|-------------|---------|
 | `GCP_PROJECT_ID` | Yes | Your GCP project ID | `my-project-123` |
 | `GCP_LOCATION` | No | GCP location | `us-central1` (default) |
-| `SLACK_SIGNING_SECRET` | Yes | Slack app signing secret | `abc123...` |
+| `SLACK_SIGNING_SECRET` | Yes | Comma-separated Slack app signing secrets (one per bot) | `secret1,secret2` |
 | `FIRESTORE_AGENTS_COLLECTION` | No | Firestore collection name | `agents` (default) |
 | `FIRESTORE_SESSIONS_COLLECTION` | No | Firestore collection name | `sessions` (default) |
 | `SESSION_TIMEOUT_MINUTES` | No | Session expiry (minutes of inactivity) | `30` (default) |
@@ -370,11 +370,13 @@ curl -s https://slack.com/api/auth.test \
 ### "Slack verification failed"
 
 - Check signing secret is correct in `.env`
+- If you have multiple Slack bots, ensure all signing secrets are listed (comma-separated) in `SLACK_SIGNING_SECRET`
 - Ensure middleware is running and accessible
 
 ### "URL verification failed" (Slack)
 
 - Ensure middleware is running before configuring Slack URL
+- If adding a new bot, add its signing secret to `SLACK_SIGNING_SECRET` (comma-separated) **before** configuring the Event Subscriptions URL
 - For ngrok: Make sure tunnel is active and URL is correct
 - Check logs for signature verification errors
 

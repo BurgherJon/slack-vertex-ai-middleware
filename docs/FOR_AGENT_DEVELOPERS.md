@@ -56,7 +56,12 @@ slack apps create -m my-new-agent-manifest.yml
 
 # Save the token:
 export NEW_AGENT_SLACK_BOT_TOKEN="xoxb-your-token-here"
-export SLACK_SIGNING_SECRET="your-signing-secret"
+
+# IMPORTANT: Add the new bot's signing secret to the middleware .env
+# The middleware supports multiple comma-separated signing secrets:
+# SLACK_SIGNING_SECRET=existing-secret,new-bot-signing-secret
+# You must add the new secret BEFORE configuring Event Subscriptions,
+# otherwise Slack's URL verification challenge will fail.
 
 # IMPORTANT: Get the correct user_id (NOT the B... bot_id from Slack settings!)
 # The middleware uses user_id from Slack's authorizations, which starts with U
@@ -302,13 +307,15 @@ echo $SLACK_BOT_TOKEN | grep "^xoxb-"
 
 ### "URL verification failed" (Slack)
 
-**Check signing secret is correct:**
+**Check signing secret is included in the middleware config:**
 ```bash
 # In middleware repo .env file
 grep SLACK_SIGNING_SECRET .env
 
-# Should match the value in:
-# https://api.slack.com/apps → Your app → Basic Information → App Credentials
+# SLACK_SIGNING_SECRET supports comma-separated values (one per Slack app).
+# Your new bot's signing secret must be in this list BEFORE configuring
+# Event Subscriptions, otherwise the URL verification challenge will fail.
+# Find each secret at: https://api.slack.com/apps → Your app → Basic Information
 ```
 
 **Ensure middleware is running and accessible:**
