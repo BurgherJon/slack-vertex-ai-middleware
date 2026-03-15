@@ -82,9 +82,47 @@ gcloud builds submit "$REPO_ROOT" \
     --substitutions="COMMIT_SHA=$COMMIT_SHA"
 
 echo ""
+
+# --- Route traffic to latest revision ---
+SERVICE_NAME="slack-vertex-middleware"
+echo "Routing 100% traffic to latest revision..."
+gcloud run services update-traffic "$SERVICE_NAME" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --to-latest
+
+# --- Clean up old revisions (keep only the latest) ---
+echo ""
+echo "Cleaning up old revisions..."
+LATEST_REVISION=$(gcloud run services describe "$SERVICE_NAME" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --format="value(status.traffic[0].revisionName)")
+
+OLD_REVISIONS=$(gcloud run revisions list \
+    --service="$SERVICE_NAME" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --format="value(metadata.name)" \
+    | grep -v "^${LATEST_REVISION}$" || true)
+
+if [[ -n "$OLD_REVISIONS" ]]; then
+    while IFS= read -r rev; do
+        echo "  Deleting revision: $rev"
+        gcloud run revisions delete "$rev" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --quiet 2>/dev/null || echo "  (could not delete $rev — may still be draining traffic)"
+    done <<< "$OLD_REVISIONS"
+    echo "Cleanup complete."
+else
+    echo "  No old revisions to clean up."
+fi
+
+echo ""
 echo "=== Deployment complete ==="
 echo "Service URL:"
-gcloud run services describe slack-vertex-middleware \
+gcloud run services describe "$SERVICE_NAME" \
     --project="$PROJECT_ID" \
     --region="$REGION" \
     --format="value(status.url)" 2>/dev/null || echo "  (could not retrieve — check Cloud Console)"
