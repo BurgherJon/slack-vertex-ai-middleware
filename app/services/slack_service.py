@@ -90,6 +90,32 @@ class SlackService:
             logger.error(f"Unexpected error posting to Slack channel {channel}: {e}")
             raise
 
+    async def get_user_info(self, token: str, user_id: str) -> dict:
+        """
+        Get Slack user profile info (display name, real name).
+
+        Args:
+            token: Slack Bot User OAuth Token
+            user_id: Slack user ID (U...)
+
+        Returns:
+            User info dict from Slack API
+
+        Raises:
+            SlackApiError: If Slack API call fails
+        """
+        client = AsyncWebClient(token=token)
+        try:
+            response = await client.users_info(user=user_id)
+            if response["ok"]:
+                return response["user"]
+            else:
+                logger.error(f"Failed to get user info: {response}")
+                return {}
+        except SlackApiError as e:
+            logger.error(f"Error getting user info for {user_id}: {e.response.get('error')}")
+            return {}
+
     async def get_conversation_info(self, token: str, channel: str) -> dict:
         """
         Get information about a conversation/channel.

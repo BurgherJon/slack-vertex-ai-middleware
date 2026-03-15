@@ -93,6 +93,23 @@ class MessageProcessor:
 
             logger.info(f"Processing message for agent: {agent.display_name}")
 
+            # Resolve Slack user's display name and prefix the message
+            # so the agent knows who is talking
+            user_info = await self.slack.get_user_info(
+                token=agent.slack_bot_token, user_id=slack_user_id
+            )
+            if user_info:
+                user_display_name = (
+                    user_info.get("profile", {}).get("display_name")
+                    or user_info.get("real_name")
+                    or slack_user_id
+                )
+            else:
+                user_display_name = slack_user_id
+
+            message_text = f"[From: {user_display_name} | SlackID: {slack_user_id}] {message_text}"
+            logger.info(f"Resolved user identity: {user_display_name} ({slack_user_id})")
+
             # Step 2: Get or create Vertex AI session
             session_id = await self._get_or_create_session(
                 slack_user_id=slack_user_id,
