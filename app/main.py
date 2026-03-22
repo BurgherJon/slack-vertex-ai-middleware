@@ -10,6 +10,7 @@ from app.api.v1 import routes as v1_routes
 from app.services.firestore_service import FirestoreService
 from app.services.vertex_ai_service import VertexAIService
 from app.services.slack_service import SlackService
+from app.services.scheduled_job_service import ScheduledJobService
 
 # Configure logging
 logging.basicConfig(
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
     app.state.firestore = FirestoreService()
     app.state.vertex_ai = VertexAIService()
     app.state.slack = SlackService()
+    app.state.scheduled_job_service = ScheduledJobService(firestore=app.state.firestore)
 
     logger.info("Services initialized successfully")
 

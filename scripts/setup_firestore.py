@@ -47,11 +47,20 @@ def setup_firestore(project_id: str) -> bool:
         sessions_ref.document("_placeholder").set(test_doc)
         print("✓ Sessions collection created")
 
+        # Create scheduled_jobs collection
+        print("\n3. Setting up 'scheduled_jobs' collection...")
+        scheduled_jobs_ref = client.collection("scheduled_jobs")
+
+        # Add a placeholder document
+        scheduled_jobs_ref.document("_placeholder").set(test_doc)
+        print("✓ Scheduled jobs collection created")
+
         print("\n" + "=" * 60)
         print("✓ Firestore setup complete!")
         print("\nCollections created:")
         print("  - agents")
         print("  - sessions")
+        print("  - scheduled_jobs")
         print("\nNote: Delete placeholder documents after adding real data.")
         print("\nNext steps:")
         print("  1. Deploy agents using scripts/deploy_agent.py")

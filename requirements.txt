@@ -9,6 +9,7 @@ pydantic-settings==2.6.0
 # Google Cloud
 google-cloud-firestore==2.23.0
 google-cloud-aiplatform==1.112.0
+google-cloud-scheduler==2.14.1
 cloudpickle==3.1.2
 google-cloud-trace==1.18.0
 google-cloud-logging==3.13.0
@@ -22,3 +23,4 @@ aiohttp==3.13.3
 # Utilities
 httpx==0.28.0
 python-dotenv==1.0.1
+croniter==2.0.5

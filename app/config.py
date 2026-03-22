@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # Firestore
     firestore_agents_collection: str = "agents"
     firestore_sessions_collection: str = "sessions"
+    firestore_scheduled_jobs_collection: str = "scheduled_jobs"
 
     # Session management
     # Sessions expire after this many minutes of inactivity
@@ -31,6 +32,12 @@ class Settings(BaseSettings):
     def slack_signing_secrets(self) -> list[str]:
         """Parse SLACK_SIGNING_SECRET as a comma-separated list."""
         return [s.strip() for s in self.slack_signing_secret.split(",") if s.strip()]
+
+    # Cloud Scheduler (for scheduled jobs)
+    cloud_run_url: str = ""  # For OIDC audience verification (e.g., https://service-xxx.run.app)
+    cloud_scheduler_location: str = "us-central1"
+    cloud_scheduler_service_account: str = ""  # scheduler-sa@PROJECT.iam.gserviceaccount.com
+    scheduled_job_lock_timeout_seconds: int = 300  # 5 minutes
 
     # API settings
     api_v1_prefix: str = "/api/v1"

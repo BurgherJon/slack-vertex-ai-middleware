@@ -434,4 +434,173 @@ gcloud run logs read slack-vertex-middleware --region us-central1 --limit 50
 
 ---
 
+## Building Scheduled Job Tools
+
+Your agent can provide tools that allow users to manage their own scheduled jobs through the middleware API. This enables features like:
+- "Remind me every morning at 9 AM to review my goals"
+- "Show me my scheduled check-ins"
+- "Cancel my daily standup reminder"
+
+### Scheduled Jobs API
+
+The middleware exposes a REST API for managing scheduled jobs. Your agent can call these endpoints using HTTP tools.
+
+**Base URL**: `https://YOUR_MIDDLEWARE_URL/api/v1/scheduled-jobs`
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/scheduled-jobs` | Create a new scheduled job |
+| `GET` | `/scheduled-jobs?slack_user_id={user_id}` | List jobs for a user |
+| `GET` | `/scheduled-jobs/{job_id}` | Get a specific job |
+| `PATCH` | `/scheduled-jobs/{job_id}` | Update a job |
+| `DELETE` | `/scheduled-jobs/{job_id}` | Delete a job |
+
+### Data Model
+
+Each scheduled job has the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Human-readable name (e.g., "Daily Goal Review") |
+| `prompt` | string | The message sent to the agent when the job runs |
+| `agent_id` | string | Your agent's Firestore document ID |
+| `slack_user_id` | string | The Slack user ID who will receive responses |
+| `schedule` | string | Cron expression (e.g., "0 9 * * 1-5" for 9 AM weekdays) |
+| `timezone` | string | IANA timezone (e.g., "America/New_York") |
+| `enabled` | boolean | Whether the job is active |
+
+### Example: Create Job Tool
+
+Here's an example tool definition for creating scheduled jobs:
+
+```python
+from google.adk.tools import FunctionTool
+
+def create_scheduled_reminder(
+    name: str,
+    prompt: str,
+    schedule: str,
+    timezone: str = "UTC"
+) -> dict:
+    """
+    Create a scheduled reminder that will message the user on a recurring schedule.
+
+    Args:
+        name: A friendly name for this reminder (e.g., "Morning Goals Check-in")
+        prompt: The message that will be sent to trigger the conversation
+        schedule: Cron expression for when to run (e.g., "0 9 * * 1-5" for 9 AM weekdays)
+        timezone: IANA timezone name (e.g., "America/New_York", "Europe/London")
+
+    Returns:
+        The created job details including its ID
+    """
+    import requests
+
+    # These would come from your agent's context/configuration
+    middleware_url = "https://your-middleware.run.app"
+    agent_id = "your-agent-firestore-id"
+    slack_user_id = get_current_slack_user_id()  # From conversation context
+
+    response = requests.post(
+        f"{middleware_url}/api/v1/scheduled-jobs",
+        json={
+            "name": name,
+            "prompt": prompt,
+            "agent_id": agent_id,
+            "slack_user_id": slack_user_id,
+            "schedule": schedule,
+            "timezone": timezone,
+            "enabled": True
+        }
+    )
+
+    return response.json()
+
+create_reminder_tool = FunctionTool(func=create_scheduled_reminder)
+```
+
+### Example: List Jobs Tool
+
+```python
+def list_my_scheduled_jobs() -> list:
+    """
+    List all scheduled jobs for the current user.
+
+    Returns:
+        List of scheduled jobs with their details and status
+    """
+    import requests
+
+    middleware_url = "https://your-middleware.run.app"
+    slack_user_id = get_current_slack_user_id()
+
+    response = requests.get(
+        f"{middleware_url}/api/v1/scheduled-jobs",
+        params={"slack_user_id": slack_user_id}
+    )
+
+    return response.json()["jobs"]
+
+list_jobs_tool = FunctionTool(func=list_my_scheduled_jobs)
+```
+
+### Example: Delete Job Tool
+
+```python
+def delete_scheduled_job(job_id: str) -> dict:
+    """
+    Delete a scheduled job by its ID.
+
+    Args:
+        job_id: The ID of the job to delete (from list_my_scheduled_jobs)
+
+    Returns:
+        Confirmation of deletion
+    """
+    import requests
+
+    middleware_url = "https://your-middleware.run.app"
+
+    response = requests.delete(
+        f"{middleware_url}/api/v1/scheduled-jobs/{job_id}"
+    )
+
+    return {"success": response.status_code == 204, "job_id": job_id}
+
+delete_job_tool = FunctionTool(func=delete_scheduled_job)
+```
+
+### Cron Expression Reference
+
+| Schedule | Cron Expression |
+|----------|-----------------|
+| Every day at 9 AM | `0 9 * * *` |
+| Weekdays at 9 AM | `0 9 * * 1-5` |
+| Every Monday at 10 AM | `0 10 * * 1` |
+| Every hour | `0 * * * *` |
+| Every 30 minutes | `*/30 * * * *` |
+| First day of month at noon | `0 12 1 * *` |
+
+Format: `minute hour day-of-month month day-of-week`
+
+### Security Considerations
+
+1. **User Ownership**: Jobs are filtered by `slack_user_id` - users can only see/modify their own jobs
+2. **Agent Scope**: Include `agent_id` filter when listing to show only jobs for your agent
+3. **Validation**: The API validates cron expressions and timezone values
+
+### Accessing User Context
+
+When a scheduled job executes, the prompt is sent to your agent with the user's identity:
+
+```
+[From: John Smith | SlackID: U0AFZ86NE00] What should I focus on today?
+```
+
+Your agent can use this to personalize responses or access user-specific data.
+
+---
+
 **Remember**: Save this file in your agent repo so it's always available when working on the agent!
