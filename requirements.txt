@@ -24,3 +24,4 @@ aiohttp==3.13.3
 httpx==0.28.0
 python-dotenv==1.0.1
 croniter==2.0.5
+pytz==2024.1

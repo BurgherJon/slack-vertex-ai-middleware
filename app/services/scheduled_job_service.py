@@ -1,10 +1,10 @@
-"""Service for managing scheduled jobs and Cloud Scheduler integration."""
+"""Service for managing scheduled jobs with Firestore as source of truth."""
 import logging
+from datetime import datetime
 from typing import List, Optional
+import pytz
 
 from croniter import croniter
-from google.cloud import scheduler_v1
-from google.protobuf import duration_pb2
 
 from app.config import get_settings
 from app.models.scheduled_job import ScheduledJob
@@ -15,7 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 class ScheduledJobService:
-    """Manages scheduled job lifecycle and Cloud Scheduler integration."""
+    """
+    Manages scheduled job lifecycle with Firestore as the single source of truth.
+
+    A single Cloud Scheduler dispatcher job calls the /process endpoint periodically,
+    which checks Firestore for jobs that are due and executes them.
+    """
 
     def __init__(self, firestore: FirestoreService):
         """
@@ -26,16 +31,6 @@ class ScheduledJobService:
         """
         self.firestore = firestore
         self.settings = get_settings()
-
-        # Initialize Cloud Scheduler client if configured
-        if self.settings.cloud_scheduler_service_account:
-            self.scheduler_client = scheduler_v1.CloudSchedulerAsyncClient()
-        else:
-            self.scheduler_client = None
-            logger.warning(
-                "Cloud Scheduler service account not configured. "
-                "Jobs will be stored but not scheduled."
-            )
 
     def _validate_cron_expression(self, cron: str) -> bool:
         """
@@ -53,198 +48,76 @@ class ScheduledJobService:
         except (ValueError, KeyError):
             return False
 
-    def _get_scheduler_job_name(self, job_id: str) -> str:
+    def _is_job_due(self, job: ScheduledJob) -> bool:
         """
-        Generate Cloud Scheduler job resource name.
+        Check if a job is due to run based on its cron schedule.
+
+        A job is due if the current time is past the next scheduled run time
+        after the last execution (or creation if never executed).
 
         Args:
-            job_id: Firestore document ID
+            job: ScheduledJob to check
 
         Returns:
-            Full resource name for Cloud Scheduler job
+            True if job should run now
         """
-        return (
-            f"projects/{self.settings.gcp_project_id}/"
-            f"locations/{self.settings.cloud_scheduler_location}/"
-            f"jobs/scheduled-job-{job_id}"
-        )
-
-    def _get_scheduler_parent(self) -> str:
-        """Get the Cloud Scheduler parent resource name."""
-        return (
-            f"projects/{self.settings.gcp_project_id}/"
-            f"locations/{self.settings.cloud_scheduler_location}"
-        )
-
-    async def _create_cloud_scheduler_job(self, job: ScheduledJob) -> Optional[str]:
-        """
-        Create a Cloud Scheduler job for the scheduled job.
-
-        Args:
-            job: ScheduledJob to create scheduler for
-
-        Returns:
-            Cloud Scheduler job name if created, None otherwise
-        """
-        if not self.scheduler_client or not self.settings.cloud_run_url:
-            logger.warning("Cloud Scheduler not fully configured, skipping job creation")
-            return None
-
         try:
-            scheduler_job_name = self._get_scheduler_job_name(job.id)
+            # Get the timezone for this job
+            tz = pytz.timezone(job.timezone)
+            now = datetime.now(tz)
 
-            # Build the HTTP target
-            http_target = scheduler_v1.HttpTarget(
-                uri=f"{self.settings.cloud_run_url}/api/v1/scheduled-jobs/{job.id}/execute",
-                http_method=scheduler_v1.HttpMethod.POST,
-                headers={"Content-Type": "application/json"},
-                body=b'{"execution_id": "' + b'${scheduler.uuid}' + b'"}',
-                oidc_token=scheduler_v1.OidcToken(
-                    service_account_email=self.settings.cloud_scheduler_service_account,
-                    audience=self.settings.cloud_run_url,
-                ),
-            )
+            # Determine the base time for cron calculation
+            if job.last_execution_at:
+                # Use last execution time
+                base_time = job.last_execution_at
+                if base_time.tzinfo is None:
+                    base_time = pytz.UTC.localize(base_time)
+                base_time = base_time.astimezone(tz)
+            else:
+                # Never executed - use creation time
+                base_time = job.created_at
+                if base_time.tzinfo is None:
+                    base_time = pytz.UTC.localize(base_time)
+                base_time = base_time.astimezone(tz)
 
-            # Build the scheduler job
-            scheduler_job = scheduler_v1.Job(
-                name=scheduler_job_name,
-                schedule=job.schedule,
-                time_zone=job.timezone,
-                http_target=http_target,
-                retry_config=scheduler_v1.RetryConfig(
-                    retry_count=0,  # We handle retries via consecutive_failures tracking
-                ),
-            )
+            # Get the next scheduled time after the base time
+            cron = croniter(job.schedule, base_time)
+            next_run = cron.get_next(datetime)
 
-            # Create the job
-            request = scheduler_v1.CreateJobRequest(
-                parent=self._get_scheduler_parent(),
-                job=scheduler_job,
-            )
-            created_job = await self.scheduler_client.create_job(request=request)
-            logger.info(f"Created Cloud Scheduler job: {created_job.name}")
-            return created_job.name
+            # Job is due if we're past the next scheduled time
+            is_due = now >= next_run
+
+            if is_due:
+                logger.debug(
+                    f"Job {job.id} ({job.name}) is due: "
+                    f"next_run={next_run}, now={now}"
+                )
+
+            return is_due
 
         except Exception as e:
-            logger.error(f"Error creating Cloud Scheduler job: {e}")
-            return None
+            logger.error(f"Error checking if job {job.id} is due: {e}")
+            return False
 
-    async def _update_cloud_scheduler_job(self, job: ScheduledJob) -> bool:
+    async def get_due_jobs(self) -> List[ScheduledJob]:
         """
-        Update the Cloud Scheduler job for a scheduled job.
-
-        Args:
-            job: ScheduledJob with updated settings
+        Find all enabled jobs that are due to run.
 
         Returns:
-            True if updated successfully
+            List of ScheduledJob objects that should be executed
         """
-        if not self.scheduler_client or not job.cloud_scheduler_job_name:
-            return False
+        # Get all enabled jobs
+        jobs = await self.firestore.list_scheduled_jobs(enabled_only=True)
 
-        try:
-            # Build updated HTTP target
-            http_target = scheduler_v1.HttpTarget(
-                uri=f"{self.settings.cloud_run_url}/api/v1/scheduled-jobs/{job.id}/execute",
-                http_method=scheduler_v1.HttpMethod.POST,
-                headers={"Content-Type": "application/json"},
-                body=b'{"execution_id": "' + b'${scheduler.uuid}' + b'"}',
-                oidc_token=scheduler_v1.OidcToken(
-                    service_account_email=self.settings.cloud_scheduler_service_account,
-                    audience=self.settings.cloud_run_url,
-                ),
-            )
+        # Filter to jobs that are due
+        due_jobs = [job for job in jobs if self._is_job_due(job)]
 
-            # Build updated scheduler job
-            scheduler_job = scheduler_v1.Job(
-                name=job.cloud_scheduler_job_name,
-                schedule=job.schedule,
-                time_zone=job.timezone,
-                http_target=http_target,
-                state=scheduler_v1.Job.State.ENABLED if job.enabled else scheduler_v1.Job.State.PAUSED,
-            )
-
-            request = scheduler_v1.UpdateJobRequest(job=scheduler_job)
-            await self.scheduler_client.update_job(request=request)
-            logger.info(f"Updated Cloud Scheduler job: {job.cloud_scheduler_job_name}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error updating Cloud Scheduler job: {e}")
-            return False
-
-    async def _delete_cloud_scheduler_job(self, scheduler_job_name: str) -> bool:
-        """
-        Delete a Cloud Scheduler job.
-
-        Args:
-            scheduler_job_name: Full resource name of the scheduler job
-
-        Returns:
-            True if deleted successfully
-        """
-        if not self.scheduler_client:
-            return False
-
-        try:
-            request = scheduler_v1.DeleteJobRequest(name=scheduler_job_name)
-            await self.scheduler_client.delete_job(request=request)
-            logger.info(f"Deleted Cloud Scheduler job: {scheduler_job_name}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error deleting Cloud Scheduler job: {e}")
-            return False
-
-    async def _pause_cloud_scheduler_job(self, scheduler_job_name: str) -> bool:
-        """
-        Pause a Cloud Scheduler job.
-
-        Args:
-            scheduler_job_name: Full resource name of the scheduler job
-
-        Returns:
-            True if paused successfully
-        """
-        if not self.scheduler_client:
-            return False
-
-        try:
-            request = scheduler_v1.PauseJobRequest(name=scheduler_job_name)
-            await self.scheduler_client.pause_job(request=request)
-            logger.info(f"Paused Cloud Scheduler job: {scheduler_job_name}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error pausing Cloud Scheduler job: {e}")
-            return False
-
-    async def _resume_cloud_scheduler_job(self, scheduler_job_name: str) -> bool:
-        """
-        Resume a paused Cloud Scheduler job.
-
-        Args:
-            scheduler_job_name: Full resource name of the scheduler job
-
-        Returns:
-            True if resumed successfully
-        """
-        if not self.scheduler_client:
-            return False
-
-        try:
-            request = scheduler_v1.ResumeJobRequest(name=scheduler_job_name)
-            await self.scheduler_client.resume_job(request=request)
-            logger.info(f"Resumed Cloud Scheduler job: {scheduler_job_name}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error resuming Cloud Scheduler job: {e}")
-            return False
+        logger.info(f"Found {len(due_jobs)} jobs due out of {len(jobs)} enabled jobs")
+        return due_jobs
 
     async def create_job(self, job_data: ScheduledJobCreate) -> ScheduledJob:
         """
-        Create a new scheduled job and corresponding Cloud Scheduler job.
+        Create a new scheduled job.
 
         Args:
             job_data: Job creation data
@@ -259,6 +132,12 @@ class ScheduledJobService:
         if not self._validate_cron_expression(job_data.schedule):
             raise ValueError(f"Invalid cron expression: {job_data.schedule}")
 
+        # Validate timezone
+        try:
+            pytz.timezone(job_data.timezone)
+        except pytz.UnknownTimeZoneError:
+            raise ValueError(f"Invalid timezone: {job_data.timezone}")
+
         # Validate agent exists
         agent = await self.firestore.get_agent_by_id(job_data.agent_id)
         if not agent:
@@ -267,19 +146,12 @@ class ScheduledJobService:
         # Create Firestore document
         job = await self.firestore.create_scheduled_job(job_data.model_dump())
 
-        # Create Cloud Scheduler job
-        scheduler_job_name = await self._create_cloud_scheduler_job(job)
-        if scheduler_job_name:
-            await self.firestore.update_scheduled_job(
-                job.id, {"cloud_scheduler_job_name": scheduler_job_name}
-            )
-            job = await self.firestore.get_scheduled_job(job.id)
-
+        logger.info(f"Created scheduled job: {job.name} (id: {job.id})")
         return job
 
     async def update_job(self, job_id: str, updates: ScheduledJobUpdate) -> Optional[ScheduledJob]:
         """
-        Update job configuration and sync with Cloud Scheduler.
+        Update job configuration.
 
         Args:
             job_id: Firestore document ID
@@ -296,31 +168,28 @@ class ScheduledJobService:
         if not job:
             return None
 
-        # Validate cron if being updated
         update_dict = updates.model_dump(exclude_unset=True)
+
+        # Validate cron if being updated
         if "schedule" in update_dict and not self._validate_cron_expression(update_dict["schedule"]):
             raise ValueError(f"Invalid cron expression: {update_dict['schedule']}")
+
+        # Validate timezone if being updated
+        if "timezone" in update_dict:
+            try:
+                pytz.timezone(update_dict["timezone"])
+            except pytz.UnknownTimeZoneError:
+                raise ValueError(f"Invalid timezone: {update_dict['timezone']}")
 
         # Update Firestore
         updated_job = await self.firestore.update_scheduled_job(job_id, update_dict)
 
-        # Sync with Cloud Scheduler
-        if updated_job and updated_job.cloud_scheduler_job_name:
-            # Check if enabled status changed
-            if "enabled" in update_dict:
-                if update_dict["enabled"]:
-                    await self._resume_cloud_scheduler_job(updated_job.cloud_scheduler_job_name)
-                else:
-                    await self._pause_cloud_scheduler_job(updated_job.cloud_scheduler_job_name)
-            # Check if schedule or timezone changed
-            elif "schedule" in update_dict or "timezone" in update_dict:
-                await self._update_cloud_scheduler_job(updated_job)
-
+        logger.info(f"Updated scheduled job: {job_id}")
         return updated_job
 
     async def delete_job(self, job_id: str) -> bool:
         """
-        Delete job from Firestore and Cloud Scheduler.
+        Delete job from Firestore.
 
         Args:
             job_id: Firestore document ID
@@ -332,12 +201,8 @@ class ScheduledJobService:
         if not job:
             return False
 
-        # Delete Cloud Scheduler job first
-        if job.cloud_scheduler_job_name:
-            await self._delete_cloud_scheduler_job(job.cloud_scheduler_job_name)
-
-        # Delete Firestore document
         await self.firestore.delete_scheduled_job(job_id)
+        logger.info(f"Deleted scheduled job: {job_id}")
         return True
 
     async def get_job(self, job_id: str) -> Optional[ScheduledJob]:

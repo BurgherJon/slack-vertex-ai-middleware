@@ -1,20 +1,26 @@
 #!/bin/bash
-# Setup Cloud Scheduler service account and permissions for scheduled jobs.
+# Setup Cloud Scheduler dispatcher job for scheduled jobs.
 #
 # This script:
-# 1. Creates a service account for Cloud Scheduler
+# 1. Creates a service account for Cloud Scheduler (if not exists)
 # 2. Grants the service account permission to invoke Cloud Run
-# 3. Outputs the configuration values needed for the middleware
+# 3. Creates a single dispatcher job that runs every minute
+#
+# The dispatcher job calls /api/v1/scheduled-jobs/process which:
+# - Queries Firestore for enabled jobs
+# - Checks which jobs are due based on their cron schedule
+# - Executes each due job
 #
 # Prerequisites:
 # - gcloud CLI installed and authenticated
 # - Appropriate IAM permissions in the GCP project
+# - Cloud Run service already deployed
 #
 # Usage:
-#   ./setup_cloud_scheduler.sh --project-id YOUR_PROJECT_ID --cloud-run-service YOUR_SERVICE_NAME
+#   ./setup_cloud_scheduler.sh --cloud-run-service YOUR_SERVICE_NAME
 #
 # Example:
-#   ./setup_cloud_scheduler.sh --project-id my-project --cloud-run-service slack-vertex-middleware
+#   ./setup_cloud_scheduler.sh --cloud-run-service slack-vertex-middleware
 
 set -e
 
@@ -22,6 +28,8 @@ set -e
 REGION="us-central1"
 SERVICE_ACCOUNT_NAME="scheduler-sa"
 SERVICE_ACCOUNT_DISPLAY_NAME="Cloud Scheduler Service Account"
+DISPATCHER_JOB_NAME="scheduled-jobs-dispatcher"
+DISPATCHER_SCHEDULE="* * * * *"  # Every minute
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -40,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --service-account-name)
             SERVICE_ACCOUNT_NAME="$2"
+            shift 2
+            ;;
+        --schedule)
+            DISPATCHER_SCHEDULE="$2"
             shift 2
             ;;
         *)
@@ -66,12 +78,14 @@ if [ -z "$CLOUD_RUN_SERVICE" ]; then
 fi
 
 echo "======================================"
-echo "Cloud Scheduler Setup"
+echo "Cloud Scheduler Dispatcher Setup"
 echo "======================================"
 echo "Project ID:        $PROJECT_ID"
 echo "Region:            $REGION"
 echo "Cloud Run Service: $CLOUD_RUN_SERVICE"
 echo "Service Account:   $SERVICE_ACCOUNT_NAME"
+echo "Dispatcher Job:    $DISPATCHER_JOB_NAME"
+echo "Schedule:          $DISPATCHER_SCHEDULE"
 echo "======================================"
 echo ""
 
@@ -99,13 +113,11 @@ CLOUD_RUN_URL=$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
     --format="value(status.url)" 2>/dev/null || echo "")
 
 if [ -z "$CLOUD_RUN_URL" ]; then
-    echo "  Warning: Could not retrieve Cloud Run URL."
+    echo "  Error: Could not retrieve Cloud Run URL."
     echo "  Make sure the Cloud Run service is deployed first."
-    echo "  You'll need to set CLOUD_RUN_URL manually in your configuration."
-    CLOUD_RUN_URL="<YOUR_CLOUD_RUN_URL>"
-else
-    echo "  ✓ Cloud Run URL: $CLOUD_RUN_URL"
+    exit 1
 fi
+echo "  ✓ Cloud Run URL: $CLOUD_RUN_URL"
 echo ""
 
 # Step 3: Grant Cloud Run invoker role
@@ -125,21 +137,66 @@ gcloud services enable cloudscheduler.googleapis.com --project="$PROJECT_ID" --q
 echo "  ✓ Cloud Scheduler API enabled"
 echo ""
 
+# Step 5: Create or update the dispatcher job
+echo "Step 5: Creating dispatcher Cloud Scheduler job..."
+DISPATCHER_FULL_NAME="projects/$PROJECT_ID/locations/$REGION/jobs/$DISPATCHER_JOB_NAME"
+
+# Check if job exists
+if gcloud scheduler jobs describe "$DISPATCHER_JOB_NAME" \
+    --project="$PROJECT_ID" \
+    --location="$REGION" &>/dev/null; then
+    echo "  Updating existing dispatcher job..."
+    gcloud scheduler jobs update http "$DISPATCHER_JOB_NAME" \
+        --project="$PROJECT_ID" \
+        --location="$REGION" \
+        --schedule="$DISPATCHER_SCHEDULE" \
+        --time-zone="UTC" \
+        --uri="${CLOUD_RUN_URL}/api/v1/scheduled-jobs/process" \
+        --http-method=POST \
+        --oidc-service-account-email="$SERVICE_ACCOUNT_EMAIL" \
+        --oidc-token-audience="$CLOUD_RUN_URL" \
+        --quiet
+    echo "  ✓ Updated dispatcher job: $DISPATCHER_JOB_NAME"
+else
+    echo "  Creating new dispatcher job..."
+    gcloud scheduler jobs create http "$DISPATCHER_JOB_NAME" \
+        --project="$PROJECT_ID" \
+        --location="$REGION" \
+        --schedule="$DISPATCHER_SCHEDULE" \
+        --time-zone="UTC" \
+        --uri="${CLOUD_RUN_URL}/api/v1/scheduled-jobs/process" \
+        --http-method=POST \
+        --oidc-service-account-email="$SERVICE_ACCOUNT_EMAIL" \
+        --oidc-token-audience="$CLOUD_RUN_URL" \
+        --quiet
+    echo "  ✓ Created dispatcher job: $DISPATCHER_JOB_NAME"
+fi
+echo ""
+
 # Output configuration
 echo "======================================"
 echo "Setup Complete!"
 echo "======================================"
 echo ""
-echo "Add these values to your middleware configuration (.env or Cloud Run env vars):"
+echo "Dispatcher job created: $DISPATCHER_JOB_NAME"
+echo "  Schedule: Every minute"
+echo "  Target:   ${CLOUD_RUN_URL}/api/v1/scheduled-jobs/process"
+echo ""
+echo "The dispatcher will:"
+echo "  1. Run every minute"
+echo "  2. Query Firestore for enabled scheduled jobs"
+echo "  3. Check which jobs are due based on their cron schedule"
+echo "  4. Execute each due job"
+echo ""
+echo "Environment variables for Cloud Run (if not already set):"
 echo ""
 echo "  CLOUD_RUN_URL=$CLOUD_RUN_URL"
-echo "  CLOUD_SCHEDULER_LOCATION=$REGION"
 echo "  CLOUD_SCHEDULER_SERVICE_ACCOUNT=$SERVICE_ACCOUNT_EMAIL"
 echo ""
-echo "For Cloud Run deployment (cloudbuild.yaml or deploy script), add:"
+echo "To test the dispatcher manually:"
+echo "  gcloud scheduler jobs run $DISPATCHER_JOB_NAME --location=$REGION"
 echo ""
-echo "  --set-env-vars CLOUD_RUN_URL=$CLOUD_RUN_URL"
-echo "  --set-env-vars CLOUD_SCHEDULER_LOCATION=$REGION"
-echo "  --set-env-vars CLOUD_SCHEDULER_SERVICE_ACCOUNT=$SERVICE_ACCOUNT_EMAIL"
+echo "To view dispatcher logs:"
+echo "  gcloud logging read 'resource.type=cloud_scheduler_job AND resource.labels.job_id=$DISPATCHER_JOB_NAME' --limit=10"
 echo ""
 echo "======================================"
