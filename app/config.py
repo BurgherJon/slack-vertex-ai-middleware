@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # Session management
     # Sessions expire after this many minutes of inactivity
     # A new Vertex AI session will be created after expiry
-    session_timeout_minutes: int = 30
+    session_timeout_minutes: int = 180  # 3 hours
 
     # Slack (comma-separated list to support multiple Slack apps)
     slack_signing_secret: str

@@ -40,7 +40,7 @@ class ScheduledJobExecutor:
         1. Acquire execution lock (Firestore transaction)
         2. Verify job is enabled
         3. Get agent configuration
-        4. Create new Vertex AI session
+        4. Get or create Vertex AI session (stored in Firestore for continuity)
         5. Send prompt to agent
         6. Send response to Slack user
         7. Update execution tracking
@@ -88,9 +88,14 @@ class ScheduledJobExecutor:
                 )
                 return False
 
-            # Step 4: Create new Vertex AI session (fresh session per execution)
-            session_id = await self.vertex_ai.create_session(agent.vertex_ai_agent_id)
-            logger.info(f"Created Vertex AI session: {session_id}")
+            # Step 4: Get existing session or create new one
+            # This ensures the user can continue the conversation when replying
+            session_id = await self._get_or_create_session(
+                slack_user_id=job.slack_user_id,
+                agent_id=job.agent_id,
+                vertex_ai_agent_id=agent.vertex_ai_agent_id,
+            )
+            logger.info(f"Using Vertex AI session: {session_id}")
 
             # Resolve Slack user's display name and prefix the prompt
             user_info = await self.slack.get_user_info(
@@ -217,3 +222,44 @@ class ScheduledJobExecutor:
         except Exception as e:
             logger.exception(f"Error in test execution for job {job_id}: {e}")
             return {"success": False, "error": str(e)}
+
+    async def _get_or_create_session(
+        self, slack_user_id: str, agent_id: str, vertex_ai_agent_id: str
+    ) -> str:
+        """
+        Get existing session or create new one.
+
+        This ensures that when a scheduled job sends a message to a user,
+        any replies from the user will continue in the same conversation.
+
+        Args:
+            slack_user_id: Slack user ID (U...)
+            agent_id: Agent ID from agents collection
+            vertex_ai_agent_id: Vertex AI agent resource name
+
+        Returns:
+            Vertex AI session ID
+        """
+        # Try to get existing session
+        session = await self.firestore.get_session(
+            slack_user_id=slack_user_id, agent_id=agent_id
+        )
+
+        if session:
+            # Update last activity timestamp
+            await self.firestore.update_session_activity(session.id)
+            logger.info(f"Using existing session: {session.id}")
+            return session.vertex_ai_session_id
+
+        # No existing session, create new one in Vertex AI
+        vertex_session_id = await self.vertex_ai.create_session(vertex_ai_agent_id)
+
+        # Store in Firestore so user replies continue the conversation
+        await self.firestore.create_session(
+            slack_user_id=slack_user_id,
+            agent_id=agent_id,
+            vertex_ai_session_id=vertex_session_id,
+        )
+
+        logger.info(f"Created new session: {vertex_session_id}")
+        return vertex_session_id
