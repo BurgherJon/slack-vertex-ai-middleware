@@ -351,9 +351,10 @@ class FirestoreService:
         lock_timeout_seconds: int = 300,
     ) -> bool:
         """
-        Atomically acquire execution lock using Firestore transaction.
+        Acquire execution lock for a scheduled job.
 
-        Prevents duplicate execution when Cloud Run scales multiple instances.
+        Uses simple read-then-write pattern. Not perfectly atomic but sufficient
+        for preventing most duplicate executions.
 
         Args:
             job_id: Firestore document ID
@@ -365,51 +366,45 @@ class FirestoreService:
         """
         try:
             doc_ref = self.client.collection(self.scheduled_jobs_collection).document(job_id)
+            doc = await doc_ref.get()
 
-            @self.client.transaction
-            async def acquire_lock(transaction):
-                doc = await doc_ref.get(transaction=transaction)
+            if not doc.exists:
+                return False
 
-                if not doc.exists:
+            data = doc.to_dict()
+
+            # Check if job is enabled
+            if not data.get("enabled", True):
+                logger.info(f"Job {job_id} is disabled, skipping")
+                return False
+
+            # Check if already being executed (lock is held)
+            execution_started_at = data.get("execution_started_at")
+            if execution_started_at:
+                # Handle Firestore timestamp
+                if hasattr(execution_started_at, "timestamp"):
+                    execution_started_at = datetime.fromtimestamp(execution_started_at.timestamp())
+
+                lock_expiry = execution_started_at + timedelta(seconds=lock_timeout_seconds)
+                if datetime.utcnow() < lock_expiry:
+                    logger.info(f"Job {job_id} is already being executed, skipping")
                     return False
+                else:
+                    logger.warning(f"Job {job_id} lock expired, allowing new execution")
 
-                data = doc.to_dict()
+            # Check for duplicate execution ID
+            if data.get("last_execution_id") == execution_id:
+                logger.info(f"Job {job_id} already executed with id {execution_id}, skipping")
+                return False
 
-                # Check if job is enabled
-                if not data.get("enabled", True):
-                    logger.info(f"Job {job_id} is disabled, skipping")
-                    return False
+            # Acquire lock
+            await doc_ref.update({
+                "execution_started_at": datetime.utcnow(),
+                "last_execution_id": execution_id,
+            })
 
-                # Check if already being executed (lock is held)
-                execution_started_at = data.get("execution_started_at")
-                if execution_started_at:
-                    # Handle Firestore timestamp
-                    if hasattr(execution_started_at, "timestamp"):
-                        execution_started_at = datetime.fromtimestamp(execution_started_at.timestamp())
-
-                    lock_expiry = execution_started_at + timedelta(seconds=lock_timeout_seconds)
-                    if datetime.utcnow() < lock_expiry:
-                        logger.info(f"Job {job_id} is already being executed, skipping")
-                        return False
-                    else:
-                        logger.warning(f"Job {job_id} lock expired, allowing new execution")
-
-                # Check for duplicate execution ID
-                if data.get("last_execution_id") == execution_id:
-                    logger.info(f"Job {job_id} already executed with id {execution_id}, skipping")
-                    return False
-
-                # Acquire lock
-                transaction.update(doc_ref, {
-                    "execution_started_at": datetime.utcnow(),
-                    "last_execution_id": execution_id,
-                })
-                return True
-
-            result = await acquire_lock(self.client.transaction())
-            if result:
-                logger.info(f"Acquired execution lock for job {job_id}")
-            return result
+            logger.info(f"Acquired execution lock for job {job_id}")
+            return True
 
         except Exception as e:
             logger.error(f"Error acquiring lock for job {job_id}: {e}")

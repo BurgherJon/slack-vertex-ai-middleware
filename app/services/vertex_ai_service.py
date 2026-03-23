@@ -152,7 +152,6 @@ class VertexAIService:
                     f"Empty response from Reasoning Engine {agent_id} "
                     f"for session {session_id}"
                 )
-                full_response = "I apologize, but I couldn't generate a response. Please try again."
 
             logger.info(
                 f"Received response from Reasoning Engine {agent_id} "

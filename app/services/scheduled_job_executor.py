@@ -122,20 +122,24 @@ class ScheduledJobExecutor:
                 message=prefixed_prompt,
             )
 
-            # Step 6: Send response to Slack user
-            # Use conversations.open to get the canonical DM channel
-            dm_channel = await self.slack.open_conversation(
-                token=agent.slack_bot_token, user_id=job.slack_user_id
-            )
+            # Step 6: Only send to Slack if agent provided an actual response
+            if response.text and response.text.strip():
+                # Use conversations.open to get the canonical DM channel
+                dm_channel = await self.slack.open_conversation(
+                    token=agent.slack_bot_token, user_id=job.slack_user_id
+                )
 
-            # Format message with job name for context
-            formatted_message = f"*Scheduled: {job.name}*\n\n{response.text}"
+                # Format message with job name for context
+                formatted_message = f"*Scheduled: {job.name}*\n\n{response.text}"
 
-            await self.slack.post_message(
-                token=agent.slack_bot_token,
-                channel=dm_channel,
-                text=formatted_message,
-            )
+                await self.slack.post_message(
+                    token=agent.slack_bot_token,
+                    channel=dm_channel,
+                    text=formatted_message,
+                )
+                logger.info(f"Sent response to Slack for job {job_id}")
+            else:
+                logger.info(f"No response from agent for job {job_id}, skipping Slack message")
 
             # Step 7: Mark success and release lock
             await self.firestore.release_job_execution_lock(job_id, success=True)
