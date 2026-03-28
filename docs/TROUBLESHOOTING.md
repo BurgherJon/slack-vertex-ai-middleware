@@ -4,11 +4,72 @@ Common issues and solutions for the Slack to Vertex AI middleware.
 
 ## Table of Contents
 
+- [User-Facing Error Messages](#user-facing-error-messages)
 - [Slack Integration Issues](#slack-integration-issues)
 - [Vertex AI Issues](#vertex-ai-issues)
 - [Firestore Issues](#firestore-issues)
+- [GCS File Upload Issues](#gcs-file-upload-issues)
 - [Local Development Issues](#local-development-issues)
 - [Production Deployment Issues](#production-deployment-issues)
+
+---
+
+## User-Facing Error Messages
+
+These are error messages that users see in Slack when something goes wrong.
+
+### "I didn't like that request. Did you send me a file when I'm not set up for it? Or exceeded the character limit?"
+
+**When it appears**: The agent returned an empty response.
+
+**Common causes**:
+
+1. **Agent doesn't handle images**: User sent an image but the agent isn't configured for multimodal input
+   - **Solution**: Update agent to handle the `images` parameter (see [Receiving Images from Slack](FOR_AGENT_DEVELOPERS.md#receiving-images-from-slack))
+
+2. **Agent crashed or timed out**: The agent encountered an error during processing
+   - **Solution**: Check Vertex AI logs for errors:
+     ```bash
+     gcloud logging read "resource.type=aiplatform.googleapis.com/ReasoningEngine" --limit 50
+     ```
+
+3. **Message too long**: The input exceeded the model's context window
+   - **Solution**: Send shorter messages or configure agent to handle truncation
+
+4. **Agent returned non-text response**: Agent returned structured data instead of text
+   - **Solution**: Ensure agent's `stream_query` yields text strings
+
+### "I'm sorry, you tried to send me a file but I don't have any place to put it!"
+
+**When it appears**: User sent a file attachment but the middleware couldn't upload it to GCS.
+
+**Common causes**:
+
+1. **GCS bucket doesn't exist or is misconfigured**
+2. **Service account lacks write permissions**
+3. **Network issues connecting to GCS**
+
+**Solution**: See [GCS File Upload Issues](#gcs-file-upload-issues) section below.
+
+### "Looks like Google won't let me think right now, try again in a minute."
+
+**When it appears**: The middleware hit a Google API rate limit (HTTP 429).
+
+**Common causes**:
+
+1. **Too many requests**: High volume of messages in a short period
+2. **Quota exceeded**: Project has hit Vertex AI API quotas
+
+**Solutions**:
+
+1. **Wait and retry**: Rate limits are temporary, usually clear within a minute
+
+2. **Check quotas**:
+   ```bash
+   gcloud alpha services quota list --service=aiplatform.googleapis.com
+   ```
+
+3. **Request quota increase**: In GCP Console → IAM & Admin → Quotas
 
 ---
 
@@ -292,6 +353,96 @@ python scripts/setup_firestore.py --project-id YOUR_PROJECT_ID
      --region us-central1 \
      --format json | grep session
    ```
+
+---
+
+## GCS File Upload Issues
+
+### "I'm sorry, you tried to send me a file but I don't have any place to put it!"
+
+**Symptoms**: User sends an image to the bot and receives this error message.
+
+**Cause**: The middleware couldn't upload the file to GCS. This happens when:
+- GCS bucket doesn't exist
+- GCS bucket name is misconfigured
+- Service account lacks permissions to write to the bucket
+- Network connectivity issues to GCS
+
+**Solutions**:
+
+1. **Verify GCS bucket exists**:
+   ```bash
+   gcloud storage buckets describe gs://YOUR_BUCKET_NAME
+   ```
+
+2. **Check middleware has correct bucket name**:
+   ```bash
+   grep GCS_BUCKET_NAME .env
+   ```
+
+3. **Verify IAM permissions**:
+   ```bash
+   # Get the service account
+   PROJECT_NUMBER=$(gcloud projects describe PROJECT_ID --format="value(projectNumber)")
+   SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+   # Check bucket IAM policy
+   gcloud storage buckets get-iam-policy gs://YOUR_BUCKET_NAME | grep -A2 "$SA"
+   ```
+
+4. **Grant missing permissions** (if needed):
+   ```bash
+   gcloud storage buckets add-iam-policy-binding gs://YOUR_BUCKET_NAME \
+     --member="serviceAccount:${SA}" \
+     --role="roles/storage.objectAdmin"
+   ```
+
+5. **Check middleware logs for specific error**:
+   ```bash
+   gcloud run logs read slack-vertex-middleware \
+     --region us-central1 \
+     --limit 50 | grep -i "gcs\|upload\|bucket"
+   ```
+
+### Files upload but agent can't read them
+
+**Symptoms**: Middleware logs show "Uploaded image to GCS" but agent returns errors or ignores the image.
+
+**Solutions**:
+
+1. **Verify agent has read access to bucket**:
+   ```bash
+   # If agent uses a different service account
+   gcloud storage buckets add-iam-policy-binding gs://YOUR_BUCKET_NAME \
+     --member="serviceAccount:AGENT_SA@PROJECT.iam.gserviceaccount.com" \
+     --role="roles/storage.objectViewer"
+   ```
+
+2. **Test GCS access from agent environment**:
+   ```bash
+   # Verify the file exists
+   gcloud storage ls gs://YOUR_BUCKET_NAME/slack-files/
+   ```
+
+3. **Check agent code handles `gcs_uri` field**:
+   - Agent must check for `gcs_uri` in the images array
+   - See [FOR_AGENT_DEVELOPERS.md](FOR_AGENT_DEVELOPERS.md#receiving-images-from-slack)
+
+### GCS bucket not configured (base64 fallback)
+
+**Symptoms**: Logs show "Downloaded image (base64)" instead of "Uploaded image to GCS"
+
+**Cause**: `GCS_BUCKET_NAME` environment variable is empty or not set.
+
+**Solution**: Configure GCS bucket name:
+```bash
+# In .env file
+GCS_BUCKET_NAME=your-project-slack-files
+
+# Then restart the middleware
+```
+
+See [Setting Up GCS for Image Storage](FOR_AGENT_DEVELOPERS.md#setting-up-gcs-for-image-storage) for full setup instructions.
 
 ---
 

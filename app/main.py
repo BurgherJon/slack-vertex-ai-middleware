@@ -11,6 +11,7 @@ from app.services.firestore_service import FirestoreService
 from app.services.vertex_ai_service import VertexAIService
 from app.services.slack_service import SlackService
 from app.services.scheduled_job_service import ScheduledJobService
+from app.services.gcs_service import GCSService
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +43,14 @@ async def lifespan(app: FastAPI):
     app.state.vertex_ai = VertexAIService()
     app.state.slack = SlackService()
     app.state.scheduled_job_service = ScheduledJobService(firestore=app.state.firestore)
+
+    # Initialize GCS service if configured
+    if settings.gcs_enabled:
+        app.state.gcs = GCSService()
+        logger.info(f"GCS file upload enabled (bucket: {settings.gcs_bucket_name})")
+    else:
+        app.state.gcs = None
+        logger.info("GCS file upload disabled (no bucket configured)")
 
     logger.info("Services initialized successfully")
 

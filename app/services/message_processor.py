@@ -1,13 +1,16 @@
 """Background message processing service."""
 import base64
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from app.schemas.slack import SlackEvent
 from app.services.firestore_service import FirestoreService
 from app.services.vertex_ai_service import VertexAIService
 from app.services.slack_service import SlackService
 from app.core.exceptions import ResourceExhaustedError
+
+if TYPE_CHECKING:
+    from app.services.gcs_service import GCSService
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,7 @@ class MessageProcessor:
         firestore: FirestoreService,
         vertex_ai: VertexAIService,
         slack: SlackService,
+        gcs: Optional["GCSService"] = None,
     ):
         """
         Initialize message processor.
@@ -28,10 +32,12 @@ class MessageProcessor:
             firestore: Firestore service instance
             vertex_ai: Vertex AI service instance
             slack: Slack service instance
+            gcs: Optional GCS service instance for file uploads
         """
         self.firestore = firestore
         self.vertex_ai = vertex_ai
         self.slack = slack
+        self.gcs = gcs
 
     async def process_slack_event(self, event: SlackEvent) -> None:
         """
@@ -100,24 +106,65 @@ class MessageProcessor:
 
             logger.info(f"Processing message for agent: {agent.display_name}")
 
-            # Download image files from Slack
+            # Download and process image files from Slack
+            failed_file_uploads = 0
+            total_image_files = 0
             for file in files:
                 mimetype = file.get("mimetype", "")
                 if mimetype.startswith("image/"):
+                    total_image_files += 1
                     url = file.get("url_private")
+                    filename = file.get("name")
                     if url:
                         try:
                             image_bytes = await self.slack.download_file(
                                 token=agent.slack_bot_token,
                                 url=url
                             )
-                            images.append({
-                                "data": base64.b64encode(image_bytes).decode("utf-8"),
-                                "mime_type": mimetype
-                            })
-                            logger.info(f"Downloaded image: {mimetype}, {len(image_bytes)} bytes")
+
+                            # Upload to GCS if enabled, otherwise use base64
+                            if self.gcs:
+                                gcs_result = await self.gcs.upload_file(
+                                    file_bytes=image_bytes,
+                                    mime_type=mimetype,
+                                    original_filename=filename,
+                                )
+                                images.append({
+                                    "gcs_uri": gcs_result["gcs_uri"],
+                                    "mime_type": mimetype,
+                                })
+                                logger.info(
+                                    f"Uploaded image to GCS: {gcs_result['gcs_uri']} "
+                                    f"({len(image_bytes)} bytes)"
+                                )
+                            else:
+                                # Fallback to base64 encoding (only when GCS not configured)
+                                images.append({
+                                    "data": base64.b64encode(image_bytes).decode("utf-8"),
+                                    "mime_type": mimetype,
+                                })
+                                logger.info(
+                                    f"Downloaded image (base64): {mimetype}, "
+                                    f"{len(image_bytes)} bytes"
+                                )
                         except Exception as e:
-                            logger.error(f"Failed to download image: {e}")
+                            logger.error(f"Failed to process image: {e}")
+                            failed_file_uploads += 1
+
+            # If files were attached but none could be processed, notify user and stop
+            if total_image_files > 0 and failed_file_uploads == total_image_files:
+                logger.warning(
+                    f"All {failed_file_uploads} file upload(s) failed for user {slack_user_id}"
+                )
+                dm_channel = await self.slack.open_conversation(
+                    token=agent.slack_bot_token, user_id=slack_user_id
+                )
+                await self.slack.post_message(
+                    token=agent.slack_bot_token,
+                    channel=dm_channel,
+                    text="I'm sorry, you tried to send me a file but I don't have any place to put it!",
+                )
+                return
 
             # Resolve Slack user's display name and prefix the message
             # so the agent knows who is talking

@@ -11,7 +11,8 @@ This guide covers how to integrate your Vertex AI agent with the Slack middlewar
 3. [Troubleshooting](#troubleshooting)
 4. [Quick Reference](#quick-reference)
 5. [Receiving Images from Slack](#receiving-images-from-slack)
-6. [Building Scheduled Job Tools](#building-scheduled-job-tools)
+6. [Setting Up GCS for Image Storage](#setting-up-gcs-for-image-storage)
+7. [Building Scheduled Job Tools](#building-scheduled-job-tools)
 
 ---
 
@@ -442,7 +443,25 @@ The middleware can download images from Slack messages and forward them to your 
 
 ### What the Middleware Sends
 
-When a user sends an image via Slack, the middleware adds an `images` field to your agent's input:
+When a user sends an image via Slack, the middleware adds an `images` field to your agent's input.
+
+**With GCS configured** (recommended for Agent Engine):
+
+```python
+{
+    "message": "[From: John Smith | SlackID: U0AFZ86NE00] What wine pairs with this?",
+    "user_id": "slack-user-abc123",
+    "session_id": "5695302693795397632",
+    "images": [
+        {
+            "gcs_uri": "gs://your-bucket/slack-files/20260328/a1b2c3d4e5f6.png",
+            "mime_type": "image/png"
+        }
+    ]
+}
+```
+
+**Without GCS** (base64 fallback):
 
 ```python
 {
@@ -477,11 +496,31 @@ By default, ADK agents only process the `message` field. To handle images, you n
 
 ### Example Implementation
 
-Here's how to update your agent to process images:
+Here's how to update your agent to process images (supports both GCS URIs and base64):
 
 ```python
 import base64
+from google.cloud import storage
 from google.genai import types
+
+def load_image_bytes(img: dict) -> bytes:
+    """Load image bytes from either GCS URI or base64 data."""
+    if "gcs_uri" in img:
+        # Parse gs://bucket/path format
+        uri = img["gcs_uri"]
+        parts = uri.replace("gs://", "").split("/", 1)
+        bucket_name, blob_name = parts[0], parts[1]
+
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        return blob.download_as_bytes()
+    elif "data" in img:
+        # Base64 fallback
+        return base64.b64decode(img["data"])
+    else:
+        raise ValueError("Image must have either 'gcs_uri' or 'data' field")
+
 
 class MyAgent:
     def __init__(self):
@@ -497,7 +536,7 @@ class MyAgent:
             message: The user's text message
             user_id: User identifier
             session_id: Session identifier for conversation continuity
-            images: Optional list of image dicts with 'data' (base64) and 'mime_type'
+            images: Optional list of image dicts with 'gcs_uri' or 'data', and 'mime_type'
         """
         # Build the content parts for the prompt
         content_parts = []
@@ -505,7 +544,7 @@ class MyAgent:
         # Add images first (if any)
         if images:
             for img in images:
-                image_bytes = base64.b64decode(img["data"])
+                image_bytes = load_image_bytes(img)
                 content_parts.append(
                     types.Part.from_bytes(
                         data=image_bytes,
@@ -593,6 +632,101 @@ class MultimodalAgent(LlmAgent):
 **Image not appearing in agent input:**
 - Verify `files:read` scope is added to your Slack bot
 - Check middleware logs for download errors
+
+---
+
+## Setting Up GCS for Image Storage
+
+When `GCS_BUCKET_NAME` is configured, the middleware uploads images to Google Cloud Storage instead of base64-encoding them. This is recommended for Agent Engine and provides better performance for large images.
+
+### Step 1: Create the GCS Bucket
+
+```bash
+# Set your project variables
+export PROJECT_ID="your-gcp-project"
+export BUCKET_NAME="${PROJECT_ID}-slack-files"
+export REGION="us-central1"
+
+# Create bucket with uniform access
+gcloud storage buckets create gs://${BUCKET_NAME} \
+    --project=${PROJECT_ID} \
+    --location=${REGION} \
+    --uniform-bucket-level-access
+```
+
+### Step 2: Set Lifecycle Rule (Auto-Delete After 1 Day)
+
+Images are only needed during the conversation, so we auto-delete them after 1 day:
+
+```bash
+cat > /tmp/lifecycle.json << 'EOF'
+{
+  "rule": [
+    {
+      "action": {"type": "Delete"},
+      "condition": {"age": 1}
+    }
+  ]
+}
+EOF
+
+gcloud storage buckets update gs://${BUCKET_NAME} \
+    --lifecycle-file=/tmp/lifecycle.json
+
+# Verify lifecycle is set
+gcloud storage buckets describe gs://${BUCKET_NAME} --format="yaml(lifecycle)"
+```
+
+### Step 3: Grant IAM Permissions
+
+The middleware needs write access to upload files:
+
+```bash
+# Find your Cloud Run service account (default is the Compute Engine SA)
+export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
+export MIDDLEWARE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+# Or if you use a custom service account for Cloud Run:
+# export MIDDLEWARE_SA="your-custom-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+
+# Grant the middleware write access to the bucket
+gcloud storage buckets add-iam-policy-binding gs://${BUCKET_NAME} \
+    --member="serviceAccount:${MIDDLEWARE_SA}" \
+    --role="roles/storage.objectAdmin"
+```
+
+### Step 4: Grant Agent Read Access (If Needed)
+
+If your agents run under a different service account, grant them read access:
+
+```bash
+export AGENT_SA="your-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud storage buckets add-iam-policy-binding gs://${BUCKET_NAME} \
+    --member="serviceAccount:${AGENT_SA}" \
+    --role="roles/storage.objectViewer"
+```
+
+**Note:** If agents run under the same project's default service account, they likely already have access via project-level permissions.
+
+### Step 5: Configure the Middleware
+
+Add to your middleware's `.env` file:
+
+```bash
+GCS_BUCKET_NAME=your-project-slack-files
+GCS_FILE_PREFIX=slack-files
+```
+
+### Verifying the Setup
+
+1. Send an image to your bot via Slack DM
+2. Check middleware logs for: `"Uploaded image to GCS: gs://..."`
+3. Verify the file exists:
+   ```bash
+   gcloud storage ls gs://${BUCKET_NAME}/slack-files/
+   ```
+4. Verify your agent receives the `gcs_uri` field in the images array
 
 ---
 

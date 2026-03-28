@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     cloud_scheduler_service_account: str = ""  # scheduler-sa@PROJECT.iam.gserviceaccount.com
     scheduled_job_lock_timeout_seconds: int = 300  # 5 minutes
 
+    # GCS Configuration (for file uploads)
+    # When set, files are uploaded to GCS instead of being base64 encoded
+    gcs_bucket_name: str = ""  # Empty = GCS disabled, use base64 fallback
+    gcs_file_prefix: str = "slack-files"  # Prefix for uploaded objects
+
+    @property
+    def gcs_enabled(self) -> bool:
+        """Check if GCS file upload is configured."""
+        return bool(self.gcs_bucket_name)
+
     # API settings
     api_v1_prefix: str = "/api/v1"
 

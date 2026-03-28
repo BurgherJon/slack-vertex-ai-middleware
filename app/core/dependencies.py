@@ -1,4 +1,6 @@
 """FastAPI dependencies for dependency injection."""
+from typing import Optional
+
 from fastapi import Request
 
 from app.services.message_processor import MessageProcessor
@@ -7,6 +9,7 @@ from app.services.vertex_ai_service import VertexAIService
 from app.services.slack_service import SlackService
 from app.services.scheduled_job_service import ScheduledJobService
 from app.services.scheduled_job_executor import ScheduledJobExecutor
+from app.services.gcs_service import GCSService
 
 
 def get_message_processor(request: Request) -> MessageProcessor:
@@ -23,7 +26,21 @@ def get_message_processor(request: Request) -> MessageProcessor:
         firestore=request.app.state.firestore,
         vertex_ai=request.app.state.vertex_ai,
         slack=request.app.state.slack,
+        gcs=getattr(request.app.state, "gcs", None),
     )
+
+
+def get_gcs_service(request: Request) -> Optional[GCSService]:
+    """
+    Get GCSService instance from app state.
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        GCSService instance, or None if GCS is not configured
+    """
+    return getattr(request.app.state, "gcs", None)
 
 
 def get_firestore_service(request: Request) -> FirestoreService:

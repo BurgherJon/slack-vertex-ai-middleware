@@ -10,6 +10,7 @@ pydantic-settings==2.6.0
 google-cloud-firestore==2.23.0
 google-cloud-aiplatform==1.112.0
 google-cloud-scheduler==2.14.1
+google-cloud-storage==2.18.0
 cloudpickle==3.1.2
 google-cloud-trace==1.18.0
 google-cloud-logging==3.13.0
