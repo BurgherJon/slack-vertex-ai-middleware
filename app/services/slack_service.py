@@ -3,6 +3,7 @@ import logging
 
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.errors import SlackApiError
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -134,3 +135,31 @@ class SlackService:
         except SlackApiError as e:
             logger.error(f"Error getting conversation info: {e.response.get('error')}")
             raise
+
+    async def download_file(self, token: str, url: str) -> bytes:
+        """
+        Download a file from Slack's private URL.
+
+        Slack file URLs (url_private) require authentication with the bot token.
+
+        Args:
+            token: Slack Bot User OAuth Token
+            url: The url_private from a Slack file object
+
+        Returns:
+            Raw file bytes
+
+        Raises:
+            Exception: If download fails
+        """
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": f"Bearer {token}"}
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    file_bytes = await response.read()
+                    logger.info(f"Downloaded file from Slack: {len(file_bytes)} bytes")
+                    return file_bytes
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to download file: {response.status} - {error_text}")
+                    raise Exception(f"Failed to download Slack file: {response.status}")

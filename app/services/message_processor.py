@@ -1,4 +1,5 @@
 """Background message processing service."""
+import base64
 import logging
 from typing import Dict, Any
 
@@ -57,7 +58,11 @@ class MessageProcessor:
             channel_id = event_data.get("channel")
             message_text = event_data.get("text", "")
 
-            if not all([slack_user_id, channel_id, message_text]):
+            # Extract and download any image attachments
+            files = event_data.get("files", [])
+            images = []
+
+            if not all([slack_user_id, channel_id]):
                 logger.warning(f"Incomplete event data: {event_data}")
                 return
 
@@ -65,7 +70,7 @@ class MessageProcessor:
             channel_type = event_data.get("channel_type", "unknown")
             logger.info(
                 f"Processing message from user {slack_user_id} in channel {channel_id} "
-                f"(type: {channel_type})"
+                f"(type: {channel_type}), files: {len(files)}"
             )
 
             # Step 1: Identify which agent this message is for
@@ -94,6 +99,25 @@ class MessageProcessor:
                 return
 
             logger.info(f"Processing message for agent: {agent.display_name}")
+
+            # Download image files from Slack
+            for file in files:
+                mimetype = file.get("mimetype", "")
+                if mimetype.startswith("image/"):
+                    url = file.get("url_private")
+                    if url:
+                        try:
+                            image_bytes = await self.slack.download_file(
+                                token=agent.slack_bot_token,
+                                url=url
+                            )
+                            images.append({
+                                "data": base64.b64encode(image_bytes).decode("utf-8"),
+                                "mime_type": mimetype
+                            })
+                            logger.info(f"Downloaded image: {mimetype}, {len(image_bytes)} bytes")
+                        except Exception as e:
+                            logger.error(f"Failed to download image: {e}")
 
             # Resolve Slack user's display name and prefix the message
             # so the agent knows who is talking
@@ -124,6 +148,7 @@ class MessageProcessor:
                 agent_id=agent.vertex_ai_agent_id,
                 session_id=session_id,
                 message=message_text,
+                images=images if images else None,
             )
 
             # Step 4: Post response to Slack

@@ -105,7 +105,7 @@ class VertexAIService:
             raise
 
     async def send_message(
-        self, agent_id: str, session_id: str, message: str
+        self, agent_id: str, session_id: str, message: str, images: list = None
     ) -> VertexAIResponse:
         """
         Send message to Vertex AI Reasoning Engine and get response.
@@ -114,6 +114,7 @@ class VertexAIService:
             agent_id: Vertex AI reasoning engine resource name
             session_id: Combined user_id:session_id from create_session
             message: User message text
+            images: Optional list of image dicts with 'data' (base64) and 'mime_type'
 
         Returns:
             VertexAIResponse containing agent's response text
@@ -138,6 +139,8 @@ class VertexAIService:
             }
             if re_session_id:
                 input_data["session_id"] = re_session_id
+            if images:
+                input_data["images"] = images
             input_struct.update(input_data)
 
             # Create the request
