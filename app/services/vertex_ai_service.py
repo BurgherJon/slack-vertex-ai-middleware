@@ -105,7 +105,7 @@ class VertexAIService:
             raise
 
     async def send_message(
-        self, agent_id: str, session_id: str, message: str, images: list = None
+        self, agent_id: str, session_id: str, message: str
     ) -> VertexAIResponse:
         """
         Send message to Vertex AI Reasoning Engine and get response.
@@ -113,8 +113,7 @@ class VertexAIService:
         Args:
             agent_id: Vertex AI reasoning engine resource name
             session_id: Combined user_id:session_id from create_session
-            message: User message text
-            images: Optional list of image dicts with 'data' (base64) and 'mime_type'
+            message: User message text (may contain embedded image references)
 
         Returns:
             VertexAIResponse containing agent's response text
@@ -139,9 +138,6 @@ class VertexAIService:
             }
             if re_session_id:
                 input_data["session_id"] = re_session_id
-            if images:
-                input_data["images"] = images
-                logger.info(f"Sending {len(images)} image(s) to Reasoning Engine")
             input_struct.update(input_data)
 
             # Create the request
@@ -170,7 +166,6 @@ class VertexAIService:
                 logger.warning(
                     f"Empty response from Reasoning Engine {agent_id} "
                     f"for session {session_id}"
-                    f"{' (images were included)' if images else ''}"
                 )
 
             logger.info(

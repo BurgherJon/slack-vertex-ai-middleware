@@ -183,6 +183,18 @@ class MessageProcessor:
             message_text = f"[From: {user_display_name} | SlackID: {slack_user_id}] {message_text}"
             logger.info(f"Resolved user identity: {user_display_name} ({slack_user_id})")
 
+            # Embed image references in the message text
+            # The agent will use view_image() tool to see the actual image content
+            if images:
+                image_refs = []
+                for img in images:
+                    if "gcs_uri" in img:
+                        image_refs.append(f"[IMAGE: {img['gcs_uri']} | {img['mime_type']}]")
+                if image_refs:
+                    image_prefix = "\n".join(image_refs)
+                    message_text = f"{image_prefix}\n\n{message_text}"
+                    logger.info(f"Embedded {len(image_refs)} image reference(s) in message")
+
             # Step 2: Get or create Vertex AI session
             session_id = await self._get_or_create_session(
                 slack_user_id=slack_user_id,
@@ -191,11 +203,12 @@ class MessageProcessor:
             )
 
             # Step 3: Send message to Vertex AI Agent Engine
+            # Note: images are embedded in message_text, not passed separately
+            # (ADK Runner.run() doesn't support 'images' parameter)
             response = await self.vertex_ai.send_message(
                 agent_id=agent.vertex_ai_agent_id,
                 session_id=session_id,
                 message=message_text,
-                images=images if images else None,
             )
 
             # Step 4: Post response to Slack
