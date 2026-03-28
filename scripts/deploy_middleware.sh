@@ -14,6 +14,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # --- Defaults (override with flags or environment) ---
 PROJECT_ID="${GCP_PROJECT_ID:-}"
 REGION="${GCP_LOCATION:-us-central1}"
+GCS_BUCKET="${GCS_BUCKET_NAME:-}"
 CONFIG="cloudbuild.yaml"
 
 # --- Parse arguments ---
@@ -42,6 +43,11 @@ if [[ -z "$PROJECT_ID" ]]; then
     fi
 fi
 
+# Read GCS bucket name from .env if not set
+if [[ -z "$GCS_BUCKET" ]] && [[ -f "$REPO_ROOT/.env" ]]; then
+    GCS_BUCKET=$(grep -E '^GCS_BUCKET_NAME=' "$REPO_ROOT/.env" | cut -d= -f2 | tr -d ' "'"'"'')
+fi
+
 if ! command -v gcloud &>/dev/null; then
     echo "Error: gcloud CLI not found. Install it from https://cloud.google.com/sdk/docs/install"
     exit 1
@@ -68,10 +74,11 @@ COMMIT_SHORT=$(git rev-parse --short HEAD)
 COMMIT_MSG=$(git log -1 --pretty=%s)
 
 echo "=== Middleware Deployment ==="
-echo "  Project:  $PROJECT_ID"
-echo "  Region:   $REGION"
-echo "  Commit:   $COMMIT_SHORT ($COMMIT_MSG)"
-echo "  Config:   $CONFIG"
+echo "  Project:    $PROJECT_ID"
+echo "  Region:     $REGION"
+echo "  GCS Bucket: ${GCS_BUCKET:-<not configured>}"
+echo "  Commit:     $COMMIT_SHORT ($COMMIT_MSG)"
+echo "  Config:     $CONFIG"
 echo ""
 
 # --- Submit build ---
@@ -79,7 +86,7 @@ echo "Submitting Cloud Build..."
 gcloud builds submit "$REPO_ROOT" \
     --config="$REPO_ROOT/$CONFIG" \
     --project="$PROJECT_ID" \
-    --substitutions="COMMIT_SHA=$COMMIT_SHA"
+    --substitutions="COMMIT_SHA=$COMMIT_SHA,_GCP_LOCATION=$REGION,_GCS_BUCKET_NAME=$GCS_BUCKET"
 
 echo ""
 
