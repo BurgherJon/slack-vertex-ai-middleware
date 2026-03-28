@@ -29,3 +29,9 @@ class SlackAPIError(MiddlewareException):
     """Error communicating with Slack API."""
 
     pass
+
+
+class ResourceExhaustedError(MiddlewareException):
+    """Google API rate limit exceeded (429 RESOURCE_EXHAUSTED)."""
+
+    pass

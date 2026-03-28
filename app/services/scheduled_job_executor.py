@@ -1,8 +1,10 @@
 """Scheduled job execution service."""
 import logging
+from datetime import datetime, timedelta
 from typing import Optional
 
 from app.config import get_settings
+from app.core.exceptions import ResourceExhaustedError
 from app.services.firestore_service import FirestoreService
 from app.services.vertex_ai_service import VertexAIService
 from app.services.slack_service import SlackService
@@ -143,8 +145,32 @@ class ScheduledJobExecutor:
 
             # Step 7: Mark success and release lock
             await self.firestore.release_job_execution_lock(job_id, success=True)
+
+            # Clear any pending retry (if this was a retry execution)
+            if job.retry_at:
+                await self.firestore.update_scheduled_job(job_id, {
+                    "retry_at": None,
+                    "retry_reason": None,
+                })
+                logger.info(f"Cleared retry for job {job_id} after successful execution")
+
             logger.info(f"Successfully executed job {job_id}")
             return True
+
+        except ResourceExhaustedError as e:
+            # Google API rate limit - schedule a silent retry in 1 minute
+            logger.warning(f"Rate limit hit for job {job_id}: {e}")
+
+            retry_at = datetime.utcnow() + timedelta(minutes=1)
+            await self.firestore.update_scheduled_job(job_id, {
+                "retry_at": retry_at,
+                "retry_reason": "rate_limit_429",
+            })
+            logger.info(f"Scheduled retry for job {job_id} at {retry_at}")
+
+            # Release lock (not a failure, just rate limited)
+            await self.firestore.release_job_execution_lock(job_id, success=True)
+            return False
 
         except Exception as e:
             error_msg = str(e)

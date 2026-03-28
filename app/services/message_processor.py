@@ -6,6 +6,7 @@ from app.schemas.slack import SlackEvent
 from app.services.firestore_service import FirestoreService
 from app.services.vertex_ai_service import VertexAIService
 from app.services.slack_service import SlackService
+from app.core.exceptions import ResourceExhaustedError
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class MessageProcessor:
             This function catches all exceptions to prevent background task failures
             from crashing the application.
         """
+        agent = None
         try:
             # Extract event details
             event_data: Dict[str, Any] = event.event
@@ -143,10 +145,24 @@ class MessageProcessor:
 
             logger.info(f"Successfully processed message for user {slack_user_id}")
 
+        except ResourceExhaustedError as e:
+            # Google API rate limit hit - send friendly message to user
+            logger.warning(f"Rate limit hit for user {slack_user_id}: {e}")
+            try:
+                if agent:
+                    dm_channel = await self.slack.open_conversation(
+                        token=agent.slack_bot_token, user_id=slack_user_id
+                    )
+                    await self.slack.post_message(
+                        token=agent.slack_bot_token,
+                        channel=dm_channel,
+                        text=str(e),
+                    )
+            except Exception as slack_error:
+                logger.error(f"Failed to send rate limit message to Slack: {slack_error}")
+
         except Exception as e:
             logger.exception(f"Unexpected error processing Slack event: {e}")
-            # In production, consider sending a generic error message to the user
-            # For MVP, we'll just log it
 
     async def _get_or_create_session(
         self, slack_user_id: str, agent_id: str, vertex_ai_agent_id: str

@@ -50,10 +50,11 @@ class ScheduledJobService:
 
     def _is_job_due(self, job: ScheduledJob) -> bool:
         """
-        Check if a job is due to run based on its cron schedule.
+        Check if a job is due to run based on its cron schedule or retry time.
 
-        A job is due if the current time is past the next scheduled run time
-        after the last execution (or creation if never executed).
+        A job is due if:
+        1. It has a retry_at time and now >= retry_at (one-time retry), OR
+        2. The current time is past the next scheduled run time per cron
 
         Args:
             job: ScheduledJob to check
@@ -65,6 +66,20 @@ class ScheduledJobService:
             # Get the timezone for this job
             tz = pytz.timezone(job.timezone)
             now = datetime.now(tz)
+
+            # Check for one-time retry first
+            if job.retry_at:
+                retry_time = job.retry_at
+                if retry_time.tzinfo is None:
+                    retry_time = pytz.UTC.localize(retry_time)
+                retry_time = retry_time.astimezone(tz)
+
+                if now >= retry_time:
+                    logger.info(
+                        f"Job {job.id} ({job.name}) is due for retry: "
+                        f"retry_at={retry_time}, now={now}, reason={job.retry_reason}"
+                    )
+                    return True
 
             # Determine the base time for cron calculation
             if job.last_execution_at:

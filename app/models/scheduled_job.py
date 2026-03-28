@@ -42,6 +42,13 @@ class ScheduledJob(BaseModel):
         default=0, description="Number of consecutive failed executions"
     )
 
+    retry_at: Optional[datetime] = Field(
+        default=None, description="One-time retry scheduled for this datetime"
+    )
+    retry_reason: Optional[str] = Field(
+        default=None, description="Reason for scheduling a retry (e.g., 'rate_limit_429')"
+    )
+
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
     updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update timestamp")
 

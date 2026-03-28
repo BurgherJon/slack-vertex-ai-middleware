@@ -9,8 +9,10 @@ import vertexai
 from vertexai.preview import reasoning_engines
 from google.cloud.aiplatform_v1beta1.types import reasoning_engine_execution_service as res_types
 from google.protobuf import struct_pb2
+from google.api_core.exceptions import ResourceExhausted
 
 from app.config import get_settings
+from app.core.exceptions import ResourceExhaustedError
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,20 @@ class VertexAIService:
             logger.info(f"Created Reasoning Engine session: {combined_id}")
             return combined_id
 
+        except ResourceExhausted as e:
+            logger.warning(f"Rate limit exceeded creating session for agent {agent_id}: {e}")
+            raise ResourceExhaustedError(
+                "Looks like Google won't let me think right now, try again in a minute."
+            )
         except Exception as e:
+            error_str = str(e).lower()
+            if "429" in str(e) or "resource_exhausted" in error_str:
+                logger.warning(
+                    f"Rate limit exceeded (wrapped) creating session for agent {agent_id}: {e}"
+                )
+                raise ResourceExhaustedError(
+                    "Looks like Google won't let me think right now, try again in a minute."
+                )
             logger.error(f"Error creating session for agent {agent_id}: {e}")
             raise
 
@@ -160,7 +175,24 @@ class VertexAIService:
 
             return VertexAIResponse(text=full_response)
 
+        except ResourceExhausted as e:
+            logger.warning(
+                f"Rate limit exceeded for Reasoning Engine {agent_id}, "
+                f"session {session_id}: {e}"
+            )
+            raise ResourceExhaustedError(
+                "Looks like Google won't let me think right now, try again in a minute."
+            )
         except Exception as e:
+            error_str = str(e).lower()
+            if "429" in str(e) or "resource_exhausted" in error_str:
+                logger.warning(
+                    f"Rate limit exceeded (wrapped) for Reasoning Engine {agent_id}, "
+                    f"session {session_id}: {e}"
+                )
+                raise ResourceExhaustedError(
+                    "Looks like Google won't let me think right now, try again in a minute."
+                )
             logger.error(
                 f"Error sending message to Reasoning Engine {agent_id}, "
                 f"session {session_id}: {e}"
