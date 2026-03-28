@@ -152,6 +152,17 @@ class MessageProcessor:
             )
 
             # Step 4: Post response to Slack
+            # Handle empty responses with a user-friendly message
+            response_text = response.text.strip()
+            if not response_text:
+                logger.warning(
+                    f"Empty response from agent (images: {len(images) if images else 0})"
+                )
+                response_text = (
+                    "I didn't like that request. Did you send me a file when I'm not "
+                    "set up for it? Or exceeded the character limit?"
+                )
+
             # Use conversations.open to ensure we're posting to the canonical DM channel
             # This can help with message threading/history issues
             dm_channel = await self.slack.open_conversation(
@@ -165,7 +176,7 @@ class MessageProcessor:
                 )
 
             await self.slack.post_message(
-                token=agent.slack_bot_token, channel=dm_channel, text=response.text
+                token=agent.slack_bot_token, channel=dm_channel, text=response_text
             )
 
             logger.info(f"Successfully processed message for user {slack_user_id}")

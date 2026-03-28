@@ -141,6 +141,7 @@ class VertexAIService:
                 input_data["session_id"] = re_session_id
             if images:
                 input_data["images"] = images
+                logger.info(f"Sending {len(images)} image(s) to Reasoning Engine")
             input_struct.update(input_data)
 
             # Create the request
@@ -169,6 +170,7 @@ class VertexAIService:
                 logger.warning(
                     f"Empty response from Reasoning Engine {agent_id} "
                     f"for session {session_id}"
+                    f"{' (images were included)' if images else ''}"
                 )
 
             logger.info(
@@ -218,11 +220,23 @@ class VertexAIService:
         """
         text_parts = []
 
-        for chunk_str in chunks:
+        # Log chunk count for debugging
+        logger.debug(f"Processing {len(chunks)} response chunks")
+
+        for i, chunk_str in enumerate(chunks):
             try:
                 chunk = json.loads(chunk_str)
+
+                # Log any errors in the response
+                if "error" in chunk:
+                    logger.warning(f"Chunk {i} contains error: {chunk['error']}")
+
                 content = chunk.get("content", {})
                 parts = content.get("parts", [])
+
+                # Log if chunk has no content/parts (helps diagnose empty responses)
+                if not parts:
+                    logger.debug(f"Chunk {i} has no parts. Keys: {list(chunk.keys())}")
 
                 for part in parts:
                     # Extract text content (skip function calls/responses)
