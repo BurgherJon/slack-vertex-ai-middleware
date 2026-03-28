@@ -10,6 +10,8 @@ This guide covers how to integrate your Vertex AI agent with the Slack middlewar
 2. [Updating an Existing Agent](#updating-an-existing-agent)
 3. [Troubleshooting](#troubleshooting)
 4. [Quick Reference](#quick-reference)
+5. [Receiving Images from Slack](#receiving-images-from-slack)
+6. [Building Scheduled Job Tools](#building-scheduled-job-tools)
 
 ---
 
@@ -431,6 +433,166 @@ gcloud firestore documents list sessions
 # Check logs
 gcloud run logs read slack-vertex-middleware --region us-central1 --limit 50
 ```
+
+---
+
+## Receiving Images from Slack
+
+The middleware can download images from Slack messages and forward them to your agent. However, **ADK agents are not multimodal by default** - you need to update your agent code to handle images.
+
+### What the Middleware Sends
+
+When a user sends an image via Slack, the middleware adds an `images` field to your agent's input:
+
+```python
+{
+    "message": "[From: John Smith | SlackID: U0AFZ86NE00] What wine pairs with this?",
+    "user_id": "slack-user-abc123",
+    "session_id": "5695302693795397632",
+    "images": [
+        {
+            "data": "iVBORw0KGgoAAAANSUhEUgAA...",  # base64-encoded image
+            "mime_type": "image/png"
+        }
+    ]
+}
+```
+
+### Prerequisites
+
+1. **Add `files:read` scope** to your Slack bot:
+   - Go to https://api.slack.com/apps → Your app → OAuth & Permissions
+   - Under Bot Token Scopes, add `files:read`
+   - Reinstall the app to your workspace
+
+2. **Use a multimodal model** in your agent (e.g., `gemini-2.0-flash` or `gemini-1.5-pro`)
+
+### Updating Your ADK Agent
+
+By default, ADK agents only process the `message` field. To handle images, you need to modify your agent's `stream_query` method to:
+
+1. Extract images from the input
+2. Convert base64 data to Gemini `Part` objects
+3. Include them in the prompt to the LLM
+
+### Example Implementation
+
+Here's how to update your agent to process images:
+
+```python
+import base64
+from google.genai import types
+
+class MyAgent:
+    def __init__(self):
+        # Use a multimodal model
+        self.model = "gemini-2.0-flash"
+        # ... rest of initialization
+
+    def stream_query(self, *, message: str, user_id: str, session_id: str = None, images: list = None, **kwargs):
+        """
+        Process a user query, optionally with images.
+
+        Args:
+            message: The user's text message
+            user_id: User identifier
+            session_id: Session identifier for conversation continuity
+            images: Optional list of image dicts with 'data' (base64) and 'mime_type'
+        """
+        # Build the content parts for the prompt
+        content_parts = []
+
+        # Add images first (if any)
+        if images:
+            for img in images:
+                image_bytes = base64.b64decode(img["data"])
+                content_parts.append(
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type=img["mime_type"]
+                    )
+                )
+
+        # Add the text message
+        content_parts.append(types.Part.from_text(message))
+
+        # Create the content object
+        user_content = types.Content(
+            role="user",
+            parts=content_parts
+        )
+
+        # Send to the model (adjust based on your agent's architecture)
+        # This example assumes you're using the Gemini client directly
+        response = self.client.models.generate_content_stream(
+            model=self.model,
+            contents=[user_content],
+            # ... your other config
+        )
+
+        for chunk in response:
+            yield chunk.text
+```
+
+### For ADK Agents Using `LlmAgent`
+
+If you're using `google.adk.agents.LlmAgent`, you'll need to customize how content is built. The simplest approach is to override the query handling:
+
+```python
+from google.adk.agents import LlmAgent
+from google.genai import types
+import base64
+
+class MultimodalAgent(LlmAgent):
+    def __init__(self, **kwargs):
+        super().__init__(
+            model="gemini-2.0-flash",  # Must be multimodal
+            **kwargs
+        )
+
+    async def _build_user_content(self, message: str, images: list = None) -> types.Content:
+        """Build user content with optional images."""
+        parts = []
+
+        # Add images first
+        if images:
+            for img in images:
+                image_bytes = base64.b64decode(img["data"])
+                parts.append(
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type=img["mime_type"]
+                    )
+                )
+
+        # Add text
+        parts.append(types.Part.from_text(message))
+
+        return types.Content(role="user", parts=parts)
+```
+
+### Testing Image Support
+
+1. Deploy your updated agent to Vertex AI
+2. Update the middleware registration (same Slack bot, new Vertex AI agent ID)
+3. Send an image to your bot via Slack DM
+4. Check Cloud Run logs for:
+   - `"Downloaded image: image/png, XXXXX bytes"` - middleware received image
+   - `"Sending 1 image(s) to Reasoning Engine"` - middleware forwarded to your agent
+
+### Troubleshooting
+
+**Agent returns empty response when image is sent:**
+- Your agent isn't processing the `images` field - implement the handling above
+- Check your model supports vision (use `gemini-2.0-flash` or `gemini-1.5-pro`)
+
+**"I didn't like that request" message:**
+- This is the middleware's fallback when the agent returns an empty response
+- Usually means the agent doesn't know how to handle the `images` parameter
+
+**Image not appearing in agent input:**
+- Verify `files:read` scope is added to your Slack bot
+- Check middleware logs for download errors
 
 ---
 
