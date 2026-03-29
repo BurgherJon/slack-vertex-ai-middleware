@@ -154,7 +154,15 @@ class VertexAIService:
                 responses = []
                 for chunk in exec_client.stream_query_reasoning_engine(request=request):
                     if chunk.data:
-                        responses.append(chunk.data.decode('utf-8'))
+                        chunk_str = chunk.data.decode('utf-8')
+                        responses.append(chunk_str)
+                        # Check raw response for rate limit errors
+                        chunk_lower = chunk_str.lower()
+                        if "resource_exhausted" in chunk_lower or '"code": 429' in chunk_str:
+                            logger.warning(f"Rate limit detected in raw chunk: {chunk_str[:200]}")
+                            raise ResourceExhaustedError(
+                                "Looks like Google won't let me think right now, try again in a minute."
+                            )
                 return responses
 
             chunks = await loop.run_in_executor(None, stream_query)
@@ -212,6 +220,9 @@ class VertexAIService:
 
         Returns:
             Extracted text content
+
+        Raises:
+            ResourceExhaustedError: If the response contains rate limit errors
         """
         text_parts = []
 
@@ -222,9 +233,17 @@ class VertexAIService:
             try:
                 chunk = json.loads(chunk_str)
 
-                # Log any errors in the response
+                # Check for rate limit errors in the response
                 if "error" in chunk:
-                    logger.warning(f"Chunk {i} contains error: {chunk['error']}")
+                    error_info = chunk["error"]
+                    error_str = str(error_info).lower()
+                    logger.warning(f"Chunk {i} contains error: {error_info}")
+
+                    # Detect rate limit / resource exhausted errors
+                    if "429" in str(error_info) or "resource_exhausted" in error_str or "rate" in error_str:
+                        raise ResourceExhaustedError(
+                            "Looks like Google won't let me think right now, try again in a minute."
+                        )
 
                 content = chunk.get("content", {})
                 parts = content.get("parts", [])
