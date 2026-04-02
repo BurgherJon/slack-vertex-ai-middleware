@@ -118,6 +118,9 @@ class VertexAIService:
         Returns:
             VertexAIResponse containing agent's response text
         """
+        message_length = len(message)
+        logger.info(f"Sending message to agent (length: {message_length} chars)")
+
         try:
             engine = self._get_engine(agent_id)
             exec_client = self._exec_clients[agent_id]
@@ -156,29 +159,26 @@ class VertexAIService:
                     if chunk.data:
                         chunk_str = chunk.data.decode('utf-8')
                         responses.append(chunk_str)
-                        # Check raw response for rate limit errors
-                        chunk_lower = chunk_str.lower()
-                        if "resource_exhausted" in chunk_lower or '"code": 429' in chunk_str:
-                            logger.warning(f"Rate limit detected in raw chunk: {chunk_str[:200]}")
-                            raise ResourceExhaustedError(
-                                "Looks like Google won't let me think right now, try again in a minute."
-                            )
                 return responses
 
             chunks = await loop.run_in_executor(None, stream_query)
+            chunk_count = len(chunks)
 
             # Extract text content from response chunks
-            full_response = self._extract_text_from_chunks(chunks)
+            full_response = self._extract_text_from_chunks(
+                chunks, message_length=message_length
+            )
 
             if not full_response.strip():
                 logger.warning(
                     f"Empty response from Reasoning Engine {agent_id} "
-                    f"for session {session_id}"
+                    f"for session {session_id} "
+                    f"(received {chunk_count} chunks)"
                 )
 
             logger.info(
                 f"Received response from Reasoning Engine {agent_id} "
-                f"(length: {len(full_response)} chars)"
+                f"({chunk_count} chunks, {len(full_response)} chars)"
             )
 
             return VertexAIResponse(text=full_response)
@@ -207,7 +207,9 @@ class VertexAIService:
             )
             raise
 
-    def _extract_text_from_chunks(self, chunks: list) -> str:
+    def _extract_text_from_chunks(
+        self, chunks: list, message_length: int = 0
+    ) -> str:
         """
         Extract text content from Reasoning Engine response chunks.
 
@@ -217,40 +219,19 @@ class VertexAIService:
 
         Args:
             chunks: List of JSON strings from the stream
+            message_length: Length of the original message (for diagnostic logging)
 
         Returns:
             Extracted text content
-
-        Raises:
-            ResourceExhaustedError: If the response contains rate limit errors
         """
         text_parts = []
-
-        # Log chunk count for debugging
-        logger.debug(f"Processing {len(chunks)} response chunks")
+        chunk_count = len(chunks)
 
         for i, chunk_str in enumerate(chunks):
             try:
                 chunk = json.loads(chunk_str)
-
-                # Check for rate limit errors in the response
-                if "error" in chunk:
-                    error_info = chunk["error"]
-                    error_str = str(error_info).lower()
-                    logger.warning(f"Chunk {i} contains error: {error_info}")
-
-                    # Detect rate limit / resource exhausted errors
-                    if "429" in str(error_info) or "resource_exhausted" in error_str or "rate" in error_str:
-                        raise ResourceExhaustedError(
-                            "Looks like Google won't let me think right now, try again in a minute."
-                        )
-
                 content = chunk.get("content", {})
                 parts = content.get("parts", [])
-
-                # Log if chunk has no content/parts (helps diagnose empty responses)
-                if not parts:
-                    logger.debug(f"Chunk {i} has no parts. Keys: {list(chunk.keys())}")
 
                 for part in parts:
                     # Extract text content (skip function calls/responses)
@@ -261,7 +242,19 @@ class VertexAIService:
                 # If not valid JSON, might be raw text
                 text_parts.append(chunk_str)
             except Exception as e:
-                logger.debug(f"Error parsing chunk: {e}")
+                logger.debug(f"Error parsing chunk {i}: {e}")
                 continue
 
-        return "".join(text_parts)
+        result = "".join(text_parts)
+
+        # Log diagnostic info when response is empty
+        if not result.strip() and chunk_count > 0:
+            # Log first chunk preview to help diagnose empty responses
+            first_chunk_preview = chunks[0][:500] if chunks else "(no chunks)"
+            logger.warning(
+                f"Empty text extracted from {chunk_count} chunks. "
+                f"Input message was {message_length} chars. "
+                f"First chunk preview: {first_chunk_preview}"
+            )
+
+        return result

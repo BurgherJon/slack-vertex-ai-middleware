@@ -215,13 +215,23 @@ class MessageProcessor:
             # Handle empty responses with a user-friendly message
             response_text = response.text.strip()
             if not response_text:
+                image_count = len(images) if images else 0
+                message_len = len(message_text)
                 logger.warning(
-                    f"Empty response from agent (images: {len(images) if images else 0})"
+                    f"Empty response from agent for user {slack_user_id} "
+                    f"(images: {image_count}, message_length: {message_len})"
                 )
-                response_text = (
-                    "I didn't like that request. Did you send me a file when I'm not "
-                    "set up for it? Or exceeded the character limit?"
-                )
+                # Provide context-appropriate error message
+                if image_count > 0:
+                    response_text = (
+                        "I wasn't able to process that request. "
+                        "I may not be set up to handle images."
+                    )
+                else:
+                    response_text = (
+                        "I wasn't able to process that request. "
+                        "Please try rephrasing or shortening your message."
+                    )
 
             # Use conversations.open to ensure we're posting to the canonical DM channel
             # This can help with message threading/history issues
