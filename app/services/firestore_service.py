@@ -3,12 +3,13 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from google.cloud.firestore import AsyncClient
+from google.cloud.firestore import AsyncClient, FieldFilter, ArrayUnion
 
 from app.config import get_settings
 from app.models.agent import Agent
 from app.models.session import Session
 from app.models.scheduled_job import ScheduledJob
+from app.models.user import User, PlatformIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class FirestoreService:
         self.agents_collection = settings.firestore_agents_collection
         self.sessions_collection = settings.firestore_sessions_collection
         self.scheduled_jobs_collection = settings.firestore_scheduled_jobs_collection
+        self.users_collection = "users"  # User identity collection
         logger.info(f"Firestore client initialized for project: {settings.gcp_project_id}")
 
     async def get_agent_by_bot_id(self, bot_id: str) -> Optional[Agent]:
@@ -448,3 +450,208 @@ class FirestoreService:
 
         except Exception as e:
             logger.error(f"Error releasing lock for job {job_id}: {e}")
+
+    # User Identity Management Methods
+
+    async def create_user(self, user: User) -> str:
+        """
+        Create a new user document.
+
+        Args:
+            user: User object to create
+
+        Returns:
+            Created user's document ID
+
+        Raises:
+            Exception: If creation fails
+        """
+        try:
+            now = datetime.utcnow()
+            user_data = user.model_dump(exclude={"id"})
+            user_data["created_at"] = now
+            user_data["updated_at"] = now
+
+            # Convert PlatformIdentity objects to dicts
+            user_data["identities"] = [
+                identity.model_dump() for identity in user.identities
+            ]
+
+            doc_ref = self.client.collection(self.users_collection).document()
+            await doc_ref.set(user_data)
+
+            logger.info(f"Created user: {doc_ref.id} ({user.primary_name})")
+            return doc_ref.id
+
+        except Exception as e:
+            logger.error(f"Error creating user: {e}")
+            raise
+
+    async def get_user_by_id(self, user_id: str) -> Optional[User]:
+        """
+        Get user by document ID.
+
+        Args:
+            user_id: Firestore document ID
+
+        Returns:
+            User if found, None otherwise
+        """
+        try:
+            doc = await self.client.collection(self.users_collection).document(user_id).get()
+
+            if not doc.exists:
+                logger.debug(f"No user found for id: {user_id}")
+                return None
+
+            data = doc.to_dict()
+
+            # Handle Firestore timestamps
+            for field in ["created_at", "updated_at"]:
+                if field in data and data[field] and hasattr(data[field], "timestamp"):
+                    data[field] = datetime.fromtimestamp(data[field].timestamp())
+
+            # Handle timestamp in identities
+            if "identities" in data:
+                for identity in data["identities"]:
+                    if "linked_at" in identity and hasattr(identity["linked_at"], "timestamp"):
+                        identity["linked_at"] = datetime.fromtimestamp(identity["linked_at"].timestamp())
+
+            user = User(**data, id=doc.id)
+            logger.debug(f"Found user: {user.primary_name} (id: {user.id})")
+            return user
+
+        except Exception as e:
+            logger.error(f"Error fetching user by id {user_id}: {e}")
+            return None
+
+    async def get_user_by_identity(
+        self, platform: str, platform_user_id: str
+    ) -> Optional[User]:
+        """
+        Find user by platform identity.
+
+        Args:
+            platform: Platform name (e.g., "slack", "google_chat")
+            platform_user_id: Platform-specific user ID
+
+        Returns:
+            User if found, None otherwise
+        """
+        try:
+            # Query for user with matching platform identity
+            # Note: This is a simplified query. For more robust matching, we may need
+            # to fetch all users and filter in memory or create a composite index.
+            query = self.client.collection(self.users_collection).limit(100)
+
+            # Fetch and filter in memory (since array_contains doesn't work well with objects)
+            matching_user = None
+            async for doc in query.stream():
+                data = doc.to_dict()
+                identities = data.get("identities", [])
+                for identity in identities:
+                    if (identity.get("platform") == platform and
+                        identity.get("platform_user_id") == platform_user_id):
+                        matching_user = (doc, data)
+                        break
+                if matching_user:
+                    break
+
+            if not matching_user:
+                logger.debug(f"No user found for {platform}:{platform_user_id}")
+                return None
+
+            doc, data = matching_user
+
+            # Handle Firestore timestamps
+            for field in ["created_at", "updated_at"]:
+                if field in data and data[field] and hasattr(data[field], "timestamp"):
+                    data[field] = datetime.fromtimestamp(data[field].timestamp())
+
+            # Handle timestamp in identities
+            if "identities" in data:
+                for identity in data["identities"]:
+                    if "linked_at" in identity and hasattr(identity["linked_at"], "timestamp"):
+                        identity["linked_at"] = datetime.fromtimestamp(identity["linked_at"].timestamp())
+
+            user = User(**data, id=doc.id)
+            logger.debug(f"Found user {user.id} for {platform}:{platform_user_id}")
+            return user
+
+        except Exception as e:
+            logger.error(f"Error fetching user by identity {platform}:{platform_user_id}: {e}")
+            return None
+
+    async def get_user_by_email(self, email: str) -> Optional[User]:
+        """
+        Find user by email address.
+
+        Used for auto-linking (especially for Google Chat users).
+
+        Args:
+            email: Email address to search for
+
+        Returns:
+            User if found, None otherwise
+        """
+        try:
+            query = (
+                self.client.collection(self.users_collection)
+                .where("email", "==", email)
+                .limit(1)
+            )
+
+            docs = [d async for d in query.stream()]
+
+            if not docs:
+                logger.debug(f"No user found for email: {email}")
+                return None
+
+            data = docs[0].to_dict()
+
+            # Handle Firestore timestamps
+            for field in ["created_at", "updated_at"]:
+                if field in data and data[field] and hasattr(data[field], "timestamp"):
+                    data[field] = datetime.fromtimestamp(data[field].timestamp())
+
+            # Handle timestamp in identities
+            if "identities" in data:
+                for identity in data["identities"]:
+                    if "linked_at" in identity and hasattr(identity["linked_at"], "timestamp"):
+                        identity["linked_at"] = datetime.fromtimestamp(identity["linked_at"].timestamp())
+
+            user = User(**data, id=docs[0].id)
+            logger.debug(f"Found user {user.id} for email: {email}")
+            return user
+
+        except Exception as e:
+            logger.error(f"Error fetching user by email {email}: {e}")
+            return None
+
+    async def add_user_identity(
+        self, user_id: str, identity: PlatformIdentity
+    ) -> None:
+        """
+        Add a new platform identity to an existing user.
+
+        Args:
+            user_id: User document ID
+            identity: PlatformIdentity to add
+
+        Raises:
+            Exception: If update fails
+        """
+        try:
+            doc_ref = self.client.collection(self.users_collection).document(user_id)
+
+            # Use array union to add identity
+            await doc_ref.update({
+                "identities": ArrayUnion([identity.model_dump()]),
+                "updated_at": datetime.utcnow()
+            })
+
+            logger.info(f"Added {identity.platform} identity to user {user_id}")
+
+        except Exception as e:
+            logger.error(f"Error adding identity to user {user_id}: {e}")
+            raise
