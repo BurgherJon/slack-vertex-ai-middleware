@@ -199,6 +199,28 @@ class FirestoreService:
             logger.error(f"Error fetching agent by id {agent_id}: {e}")
             return None
 
+    async def list_agents(self) -> list[Agent]:
+        """
+        List all agent configurations.
+
+        Returns:
+            List of all agent configurations
+        """
+        try:
+            docs = await self.client.collection(self.agents_collection).get()
+            agents = []
+            for doc in docs:
+                data = doc.to_dict()
+                agent = Agent(**data, id=doc.id)
+                agents.append(agent)
+
+            logger.info(f"Listed {len(agents)} agents")
+            return agents
+
+        except Exception as e:
+            logger.error(f"Error listing agents: {e}")
+            return []
+
     async def get_scheduled_job(self, job_id: str) -> Optional[ScheduledJob]:
         """
         Get scheduled job by document ID.

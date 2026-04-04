@@ -17,7 +17,14 @@ class AgentPlatformConfig(BaseModel):
     slack_bot_token: Optional[str] = Field(default=None, description="Slack Bot OAuth Token")
 
     # Google Chat-specific fields
-    google_chat_space_name: Optional[str] = Field(default=None, description="Google Chat space name")
+    google_chat_service_account_secret: Optional[str] = Field(
+        default=None,
+        description="Secret Manager secret name for service account (e.g., 'growth-coach-credentials')"
+    )
+    google_chat_bot_name: Optional[str] = Field(
+        default=None,
+        description="Google Chat bot resource name"
+    )
 
 
 class Agent(BaseModel):

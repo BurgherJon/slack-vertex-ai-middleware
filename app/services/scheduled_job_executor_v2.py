@@ -9,6 +9,7 @@ from app.services.firestore_service import FirestoreService
 from app.services.vertex_ai_service import VertexAIService
 from app.services.identity_service import IdentityService
 from app.services.platforms.slack_connector import SlackConnector
+from app.services.platforms.google_chat_connector import GoogleChatConnector
 from app.services.platforms.base import PlatformConnector
 
 logger = logging.getLogger(__name__)
@@ -271,9 +272,15 @@ class ScheduledJobExecutorV2:
                 signing_secret=None  # Not needed for sending
             )
 
-        # TODO: Add Google Chat connector when implemented
-        # elif platform == "google_chat":
-        #     ...
+        elif platform == "google_chat":
+            google_chat_config = agent.get_google_chat_config()
+            if not google_chat_config or not google_chat_config.google_chat_service_account_secret:
+                logger.error(f"Agent {agent.id} has no Google Chat configuration")
+                return None
+
+            return GoogleChatConnector(
+                service_account_secret_name=google_chat_config.google_chat_service_account_secret
+            )
 
         logger.error(f"Unsupported platform: {platform}")
         return None
