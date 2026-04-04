@@ -655,3 +655,128 @@ class FirestoreService:
         except Exception as e:
             logger.error(f"Error adding identity to user {user_id}: {e}")
             raise
+
+    # New user-based session methods
+
+    async def get_session_by_user(
+        self, user_id: str, agent_id: str
+    ) -> Optional[Session]:
+        """
+        Get existing session for unified user + agent combination if not expired.
+
+        Sessions expire after `session_timeout_minutes` of inactivity.
+        If the session has expired, it will be deleted and None returned.
+
+        Args:
+            user_id: Unified user ID from users collection
+            agent_id: Agent ID from agents collection
+
+        Returns:
+            Session if found and not expired, None otherwise
+        """
+        try:
+            settings = get_settings()
+            session_key = f"{user_id}_{agent_id}"
+            doc = await self.client.collection(self.sessions_collection).document(session_key).get()
+
+            if not doc.exists:
+                logger.info(f"No existing session for user {user_id} + agent {agent_id}")
+                return None
+
+            data = doc.to_dict()
+
+            # Check if session has expired
+            last_activity = data.get("last_activity_at")
+            if last_activity:
+                # Handle both datetime objects and Firestore timestamps
+                if hasattr(last_activity, 'timestamp'):
+                    last_activity = datetime.fromtimestamp(last_activity.timestamp())
+
+                expiry_time = last_activity + timedelta(minutes=settings.session_timeout_minutes)
+                if datetime.utcnow() > expiry_time:
+                    logger.info(
+                        f"Session {session_key} expired (last activity: {last_activity}, "
+                        f"timeout: {settings.session_timeout_minutes} minutes)"
+                    )
+                    # Delete the expired session
+                    await self.client.collection(self.sessions_collection).document(session_key).delete()
+                    return None
+
+            session = Session(**data, id=doc.id)
+            logger.info(f"Found existing session: {session.id}")
+            return session
+
+        except Exception as e:
+            logger.error(f"Error fetching session for user {user_id}/agent {agent_id}: {e}")
+            return None
+
+    async def create_session_for_user(
+        self, user_id: str, agent_id: str, vertex_ai_session_id: str, platform: str
+    ) -> Session:
+        """
+        Create new session mapping for unified user.
+
+        Args:
+            user_id: Unified user ID from users collection
+            agent_id: Agent ID from agents collection
+            vertex_ai_session_id: Vertex AI session ID
+            platform: Platform this session was created from
+
+        Returns:
+            Newly created Session
+
+        Raises:
+            Exception: If session creation fails
+        """
+        try:
+            session_key = f"{user_id}_{agent_id}"
+            now = datetime.utcnow()
+
+            session_data = {
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "vertex_ai_session_id": vertex_ai_session_id,
+                "platforms_used": [platform],
+                "created_at": now,
+                "last_activity_at": now,
+            }
+
+            await self.client.collection(self.sessions_collection).document(
+                session_key
+            ).set(session_data)
+
+            session = Session(**session_data, id=session_key)
+            logger.info(f"Created new session: {session.id} for user {user_id}")
+            return session
+
+        except Exception as e:
+            logger.error(f"Error creating session for user {user_id}/agent {agent_id}: {e}")
+            raise
+
+    async def update_session_platforms(
+        self, session_id: str, platform: str
+    ) -> None:
+        """
+        Add a platform to the session's platforms_used list if not already present.
+
+        Args:
+            session_id: Session document ID
+            platform: Platform to add (e.g., "slack", "google_chat")
+
+        Raises:
+            Exception: If update fails
+        """
+        try:
+            # Use ArrayUnion to add platform if not already present
+            await self.client.collection(self.sessions_collection).document(
+                session_id
+            ).update({
+                "platforms_used": ArrayUnion([platform]),
+                "last_activity_at": datetime.utcnow()
+            })
+
+            logger.debug(f"Updated platforms for session: {session_id} (added {platform})")
+
+        except Exception as e:
+            logger.error(f"Error updating session platforms for {session_id}: {e}")
+            raise

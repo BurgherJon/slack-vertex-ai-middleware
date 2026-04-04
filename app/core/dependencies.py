@@ -4,9 +4,11 @@ from typing import Optional
 from fastapi import Request
 
 from app.services.message_processor import MessageProcessor
+from app.services.message_processor_v2 import MessageProcessorV2
 from app.services.firestore_service import FirestoreService
 from app.services.vertex_ai_service import VertexAIService
 from app.services.slack_service import SlackService
+from app.services.identity_service import IdentityService
 from app.services.scheduled_job_service import ScheduledJobService
 from app.services.scheduled_job_executor import ScheduledJobExecutor
 from app.services.gcs_service import GCSService
@@ -109,4 +111,36 @@ def get_scheduled_job_executor(request: Request) -> ScheduledJobExecutor:
         firestore=request.app.state.firestore,
         vertex_ai=request.app.state.vertex_ai,
         slack=request.app.state.slack,
+    )
+
+
+def get_identity_service(request: Request) -> IdentityService:
+    """
+    Get IdentityService instance.
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        IdentityService instance
+    """
+    return IdentityService(firestore_service=request.app.state.firestore)
+
+
+def get_message_processor_v2(request: Request) -> MessageProcessorV2:
+    """
+    Get MessageProcessorV2 instance (multi-platform version).
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        MessageProcessorV2 instance
+    """
+    identity = get_identity_service(request)
+    return MessageProcessorV2(
+        firestore=request.app.state.firestore,
+        vertex_ai=request.app.state.vertex_ai,
+        identity=identity,
+        gcs=getattr(request.app.state, "gcs", None),
     )
