@@ -367,11 +367,30 @@ curl -s https://slack.com/api/auth.test \
   -H "Authorization: Bearer xoxb-your-token" | jq .user_id
 ```
 
-### "Slack verification failed"
+### "Slack verification failed" or 401 Unauthorized errors
 
-- Check signing secret is correct in `.env`
-- If you have multiple Slack bots, ensure all signing secrets are listed (comma-separated) in `SLACK_SIGNING_SECRET`
-- Ensure middleware is running and accessible
+**Symptoms**: Bot doesn't respond to messages, logs show "Invalid Slack signature" or "401 Unauthorized"
+
+**Cause**: Each Slack app has its own signing secret. If you have multiple bots and haven't configured all their signing secrets, some bots will be rejected.
+
+**Solution**:
+1. Check logs to see which bot is failing:
+   ```bash
+   gcloud run logs read slack-vertex-middleware --region us-central1 --limit 50 | grep "401\|Invalid"
+   ```
+2. Ensure **all** Slack signing secrets are in your `.env` file (comma-separated):
+   ```bash
+   SLACK_SIGNING_SECRET=secret1,secret2,secret3
+   ```
+3. Get signing secrets from each Slack app:
+   - Go to https://api.slack.com/apps → Your app → Basic Information
+   - Copy "Signing Secret" under "App Credentials"
+4. Redeploy after updating `.env`:
+   ```bash
+   ./scripts/deploy_middleware.sh
+   ```
+
+**Note**: The middleware verifies incoming webhook signatures against all configured signing secrets to support multiple Slack apps.
 
 ### "URL verification failed" (Slack)
 
