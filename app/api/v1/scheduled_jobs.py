@@ -18,8 +18,8 @@ from app.schemas.scheduled_job import (
     ScheduledJobUpdate,
 )
 from app.services.scheduled_job_service import ScheduledJobService
-from app.services.scheduled_job_executor import ScheduledJobExecutor
-from app.core.dependencies import get_scheduled_job_service, get_scheduled_job_executor
+from app.services.scheduled_job_executor_v2 import ScheduledJobExecutorV2
+from app.core.dependencies import get_scheduled_job_service, get_scheduled_job_executor_v2
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,7 @@ async def execute_scheduled_job(
     job_id: str,
     body: ExecuteJobRequest,
     request: Request,
-    executor: ScheduledJobExecutor = Depends(get_scheduled_job_executor),
+    executor: ScheduledJobExecutorV2 = Depends(get_scheduled_job_executor_v2),
 ):
     """
     Execute a scheduled job.
@@ -258,7 +258,7 @@ async def execute_scheduled_job(
 @router.post("/{job_id}/test")
 async def test_scheduled_job(
     job_id: str,
-    executor: ScheduledJobExecutor = Depends(get_scheduled_job_executor),
+    executor: ScheduledJobExecutorV2 = Depends(get_scheduled_job_executor_v2),
 ):
     """
     Test run a scheduled job.
@@ -280,7 +280,7 @@ async def process_due_jobs(
     request: Request,
     background_tasks: BackgroundTasks,
     service: ScheduledJobService = Depends(get_scheduled_job_service),
-    executor: ScheduledJobExecutor = Depends(get_scheduled_job_executor),
+    executor: ScheduledJobExecutorV2 = Depends(get_scheduled_job_executor_v2),
 ):
     """
     Process all scheduled jobs that are due.

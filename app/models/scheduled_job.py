@@ -1,7 +1,7 @@
 """Scheduled job configuration model."""
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ScheduledJob(BaseModel):
@@ -9,14 +9,29 @@ class ScheduledJob(BaseModel):
     Scheduled job configuration stored in Firestore.
 
     Represents a recurring job that sends a prompt to a Vertex AI agent
-    and delivers the response to a Slack user.
+    and delivers the response to a user on any platform (Slack, Google Chat, etc.).
     """
 
     id: Optional[str] = Field(default=None, description="Firestore document ID")
     name: str = Field(..., description="Human-readable job name")
     prompt: str = Field(..., description="Prompt to send to the agent")
     agent_id: str = Field(..., description="Agent ID from agents collection")
-    slack_user_id: str = Field(..., description="Slack user ID to receive responses (U...)")
+
+    # Legacy field (for backward compatibility)
+    slack_user_id: Optional[str] = Field(
+        default=None,
+        description="[DEPRECATED] Use user_id instead. Slack user ID to receive responses (U...)"
+    )
+
+    # New multi-platform fields
+    user_id: Optional[str] = Field(
+        default=None,
+        description="Unified user ID from users collection"
+    )
+    output_platform: str = Field(
+        default="slack",
+        description="Platform to deliver responses to (slack, google_chat)"
+    )
 
     schedule: str = Field(..., description="Cron expression (e.g., '0 9 * * 1-5')")
     timezone: str = Field(default="UTC", description="IANA timezone (e.g., 'America/New_York')")
@@ -53,3 +68,17 @@ class ScheduledJob(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update timestamp")
 
     model_config = {"frozen": False}  # Mutable for updates
+
+    @model_validator(mode='after')
+    def ensure_user_id(self):
+        """
+        Ensure user_id exists for backward compatibility.
+
+        If job has legacy slack_user_id but no user_id, we'll handle it
+        in the executor by looking up the user from slack_user_id.
+        """
+        # For display/logging purposes, set a note if using legacy field
+        if self.slack_user_id and not self.user_id:
+            # This will be resolved at execution time by looking up the user
+            pass
+        return self

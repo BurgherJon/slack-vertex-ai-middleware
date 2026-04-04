@@ -11,6 +11,7 @@ from app.services.slack_service import SlackService
 from app.services.identity_service import IdentityService
 from app.services.scheduled_job_service import ScheduledJobService
 from app.services.scheduled_job_executor import ScheduledJobExecutor
+from app.services.scheduled_job_executor_v2 import ScheduledJobExecutorV2
 from app.services.gcs_service import GCSService
 
 
@@ -143,4 +144,22 @@ def get_message_processor_v2(request: Request) -> MessageProcessorV2:
         vertex_ai=request.app.state.vertex_ai,
         identity=identity,
         gcs=getattr(request.app.state, "gcs", None),
+    )
+
+
+def get_scheduled_job_executor_v2(request: Request) -> ScheduledJobExecutorV2:
+    """
+    Get ScheduledJobExecutorV2 instance (multi-platform version).
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        ScheduledJobExecutorV2 instance
+    """
+    identity = get_identity_service(request)
+    return ScheduledJobExecutorV2(
+        firestore=request.app.state.firestore,
+        vertex_ai=request.app.state.vertex_ai,
+        identity=identity,
     )
