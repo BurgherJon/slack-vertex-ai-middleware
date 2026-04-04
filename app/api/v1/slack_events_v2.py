@@ -106,16 +106,27 @@ async def slack_events_v2(
                 logger.error(f"Agent {agent.id} has no Slack configuration")
                 return JSONResponse(content={"ok": True})
 
-            # Step 4: Create Slack connector with agent's credentials
+            # Step 4: Verify request signature against all configured signing secrets
+            # (each Slack app has its own signing secret)
+            signature_valid = False
+            for signing_secret in settings.slack_signing_secrets:
+                connector_check = SlackConnector(
+                    bot_token=slack_config.slack_bot_token,
+                    signing_secret=signing_secret
+                )
+                if await connector_check.verify_request(request):
+                    signature_valid = True
+                    break
+
+            if not signature_valid:
+                logger.warning("Invalid Slack signature for all configured secrets")
+                raise HTTPException(status_code=401, detail="Invalid signature")
+
+            # Step 5: Create Slack connector with agent's credentials (no signing secret needed for sending)
             connector = SlackConnector(
                 bot_token=slack_config.slack_bot_token,
-                signing_secret=settings.slack_signing_secrets[0]  # For verification
+                signing_secret=None  # Not needed for sending messages
             )
-
-            # Step 5: Verify request signature
-            if not await connector.verify_request(request):
-                logger.warning("Invalid Slack signature")
-                raise HTTPException(status_code=401, detail="Invalid signature")
 
             # Step 6: Parse Slack event into platform event
             platform_event = connector.parse_event(data)
