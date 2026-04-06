@@ -1,45 +1,104 @@
-# Slack to Vertex AI Agent Engine Middleware
+# Multi-Platform Vertex AI Agent Middleware
 
-FastAPI middleware service that routes Slack messages to Google Vertex AI Agent Engine and posts responses back. Supports multiple agents with individual Slack bots, automatic session management, and asynchronous message processing.
+FastAPI middleware service that routes messages from **Slack** and **Google Chat** to Google Vertex AI Agent Engine and posts responses back. Supports multiple agents with individual platform identities, automatic session management, cross-platform conversation continuity, and scheduled jobs.
 
 ## Features
 
-- **Multi-Agent Support**: Each agent has its own Slack bot identity
+- **Multi-Platform Support**: Slack and Google Chat with unified architecture
+- **Multi-Agent Support**: Each agent has its own identity on each platform
+- **Cross-Platform Sessions**: Continue conversations across Slack and Google Chat
 - **Session Management**: Automatic session tracking per user+agent combination
-- **Async Processing**: Responds to Slack within 3 seconds, processes in background
-- **Secure**: Slack request signature verification, no secrets in git
+- **Scheduled Jobs**: Proactive agent-initiated messages with rate limiting
+- **Async Processing**: Responds within 3 seconds, processes in background
+- **Infrastructure as Code**: Complete Terraform configuration
+- **Secure**: Request signature verification, Secret Manager integration
 - **Scalable**: Serverless deployment on Google Cloud Run
 - **Easy Setup**: Comprehensive scripts and documentation
 
+## Current Status
+
+🚧 **Migration In Progress**: Transitioning from personal GCP project to Google Workspace organization to enable Google Chat bot functionality.
+
+- ✅ Multi-platform architecture implemented (Slack + Google Chat)
+- ✅ Terraform infrastructure-as-code complete
+- ✅ Migration guides and scripts ready
+- 🔄 Awaiting Google Workspace setup and infrastructure deployment
+
+See [QUICK_START_MIGRATION.md](docs/QUICK_START_MIGRATION.md) to begin migration.
+
 ## Architecture
 
+### Message Flow
+
 ```
-User DM → Slack → POST /api/v1/slack/events
-         → Return 200 (< 3s)
-         → BackgroundTask:
-            ├─ Identify agent (Firestore lookup)
-            ├─ Get/create session (Firestore)
-            ├─ Send to Vertex AI
-            └─ Post response to Slack
+User Message
+  ↓
+Platform (Slack or Google Chat)
+  ↓
+POST /api/v1/{platform}/events
+  ↓
+Return 200 OK (< 3s)
+  ↓
+BackgroundTask:
+  ├─ Parse platform event → unified format
+  ├─ Identify agent (Firestore lookup)
+  ├─ Resolve user identity (cross-platform)
+  ├─ Get/create session (Firestore)
+  ├─ Send to Vertex AI Reasoning Engine
+  └─ Post response via platform connector
 ```
+
+### Platform Connectors
+
+The middleware uses a unified `PlatformConnector` interface:
+- **SlackConnector**: Slack Events API integration
+- **GoogleChatConnector**: Google Chat API with service account auth
+
+All platform-specific logic is isolated in connectors, making it easy to add new platforms.
 
 ## Tech Stack
 
 - **Framework**: Python 3.11+ (tested with 3.12) + FastAPI
-- **Hosting**: Google Cloud Run
-- **Database**: Google Firestore (agents registry + session mappings)
+- **Hosting**: Google Cloud Run (serverless)
+- **Database**: Google Firestore (agents, sessions, users, scheduled jobs)
 - **Agent Runtime**: Google Vertex AI Reasoning Engine
-- **Messaging**: Slack Events API (HTTP push)
+- **Messaging**:
+  - Slack Events API (HTTP push)
+  - Google Chat API (HTTP push + service account auth)
+- **Infrastructure**: Terraform (reproducible infrastructure-as-code)
+- **Secrets**: Google Cloud Secret Manager
+- **Storage**: Google Cloud Storage (temporary file uploads)
+- **Scheduling**: Google Cloud Scheduler (cron-based job dispatcher)
 - **Local Dev**: ngrok for tunneling
 
 ## Prerequisites
 
 - Python 3.11 or 3.12
-- Google Cloud account with billing enabled
-- Slack workspace with admin access
-- ngrok account (free tier)
+- **Google Workspace Business** account (for Google Chat bots)
+- Google Cloud project in Workspace organization
+- Slack workspace with admin access (for Slack integration)
+- Terraform 1.0+ (for infrastructure deployment)
+- ngrok account (free tier, for local development)
 
 ## Quick Start
+
+### Migration Path (Current)
+
+If you're migrating from a personal GCP project to Google Workspace:
+
+1. **Start Here**: [QUICK_START_MIGRATION.md](docs/QUICK_START_MIGRATION.md) (1 hour)
+2. **Detailed Guide**: [MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md) (2-3 days total)
+
+The migration guide covers:
+- Google Workspace setup
+- Terraform infrastructure deployment
+- Vertex AI agent redeployment
+- Data migration
+- Platform integration (Slack + Google Chat)
+
+### New Installation
+
+For a fresh installation with Google Workspace:
 
 ### 1. Clone and Setup
 
@@ -63,14 +122,52 @@ cp .env.example .env
 nano .env
 ```
 
-### 2. Google Cloud Setup
+### 2. Infrastructure Deployment with Terraform
+
+**Recommended**: Use Terraform for reproducible infrastructure:
+
+```bash
+# Navigate to terraform directory
+cd terraform
+
+# Copy and configure variables
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your project ID
+
+# Authenticate
+gcloud auth application-default login
+
+# Create Firestore database (Terraform can't do this)
+export GCP_PROJECT_ID=your-workspace-project-id
+gcloud firestore databases create \
+  --location=us-central1 \
+  --type=firestore-native \
+  --project=$GCP_PROJECT_ID
+
+# Deploy infrastructure
+terraform init
+terraform plan
+terraform apply
+
+# Save outputs
+terraform output -json > ../outputs.json
+```
+
+This creates:
+- All required GCP APIs
+- Service accounts with permissions
+- Secret Manager secrets
+- GCS bucket with lifecycle
+- Cloud Run service
+- Cloud Scheduler job
+
+See [terraform/README.md](terraform/README.md) for details.
+
+**Alternative**: Manual setup (legacy, not recommended):
 
 ```bash
 # Set your project ID
 export GCP_PROJECT_ID=your-project-id
-
-# Create or select GCP project
-gcloud projects create $GCP_PROJECT_ID  # Or use existing project
 gcloud config set project $GCP_PROJECT_ID
 
 # Enable required APIs
@@ -78,18 +175,17 @@ gcloud services enable \
   firestore.googleapis.com \
   aiplatform.googleapis.com \
   run.googleapis.com \
-  cloudbuild.googleapis.com
+  cloudbuild.googleapis.com \
+  secretmanager.googleapis.com \
+  chat.googleapis.com \
+  cloudscheduler.googleapis.com
 
-# Authenticate for local development (do this BEFORE creating Firestore)
-gcloud auth application-default login
-
-# Create Firestore database (REQUIRED before running setup_firestore.py)
-# This step MUST be done before the setup script
+# Create Firestore database
 gcloud firestore databases create \
   --location=us-central1 \
   --type=firestore-native
 
-# Initialize Firestore collections (only run AFTER database is created)
+# Initialize Firestore collections
 python scripts/setup_firestore.py --project-id $GCP_PROJECT_ID
 ```
 
@@ -428,10 +524,20 @@ pip install aiohttp
 
 ## Documentation
 
+### Migration & Setup
+- **[Quick Start Migration](docs/QUICK_START_MIGRATION.md)** - Begin GCP→Workspace migration (start here!)
+- **[Migration Guide](docs/MIGRATION_GUIDE.md)** - Complete migration walkthrough
+- **[Terraform README](terraform/README.md)** - Infrastructure-as-Code deployment
+
+### Platform Integration
 - [Slack Setup Guide](docs/SLACK_SETUP.md) - Detailed Slack app creation
+- [Google Chat Setup](docs/GOOGLE_CHAT_SETUP.md) - Google Chat bot configuration
+- [Google Chat Configuration Steps](docs/GOOGLE_CHAT_CONFIGURATION_STEPS.md) - Step-by-step bot setup
+
+### Development
 - [GCP Setup Guide](docs/GCP_SETUP.md) - GCP project configuration
 - [Agent Deployment](docs/AGENT_DEPLOYMENT.md) - How to deploy/update agents
-- [For Agent Developers](docs/FOR_AGENT_DEVELOPERS.md) - **Copy to agent repos**
+- **[For Agent Developers](docs/FOR_AGENT_DEVELOPERS.md)** - Copy to agent repos
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues
 
 ## License
