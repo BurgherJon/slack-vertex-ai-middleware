@@ -100,3 +100,4 @@ terraform/*_override.tf.json
 # Migration files
 migration-*.md
 migration-outputs.json
+migration-data/
