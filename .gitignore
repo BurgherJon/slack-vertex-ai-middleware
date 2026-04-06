@@ -6,8 +6,12 @@
 # Service account keys (NEVER COMMIT)
 *.json
 !.gitignore
+!package.json
+!package-lock.json
+!tsconfig.json
 service-account*.json
 credentials*.json
+*-sa-key.json
 
 # Python
 __pycache__/
@@ -78,3 +82,21 @@ tmp/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
+terraform/crash.log
+terraform/crash.*.log
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
+
+# Migration files
+migration-*.md
+migration-outputs.json

@@ -1,0 +1,11 @@
+# Example Terraform variables - Copy to terraform.tfvars and customize
+
+project_id  = "your-workspace-project-id"
+region      = "us-central1"
+environment = "prod"
+
+# Optional overrides
+# gcs_bucket_lifecycle_days = 1
+# cloud_run_service_name = "slack-vertex-middleware"
+# scheduler_job_name = "scheduled-jobs-dispatcher"
+# scheduler_cron_schedule = "* * * * *"
