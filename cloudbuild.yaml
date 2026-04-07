@@ -36,7 +36,7 @@ steps:
       - '--memory=512Mi'
       - '--timeout=300'
       - '--concurrency=80'
-      - '--max-instances=100'
+      - '--max-instances=20'
 
 options:
   logging: CLOUD_LOGGING_ONLY
