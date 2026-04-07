@@ -32,11 +32,6 @@ steps:
       - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=production,GCP_LOCATION=$_GCP_LOCATION,GCS_BUCKET_NAME=$_GCS_BUCKET_NAME'
       - '--set-secrets'
       - 'SLACK_SIGNING_SECRET=slack-signing-secret:latest'
-      - '--cpu=1'
-      - '--memory=512Mi'
-      - '--timeout=300'
-      - '--concurrency=80'
-      - '--max-instances=20'
 
 options:
   logging: CLOUD_LOGGING_ONLY
