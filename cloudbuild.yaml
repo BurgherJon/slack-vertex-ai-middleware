@@ -10,17 +10,6 @@ steps:
       - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:latest'
       - '.'
 
-  # Push to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'push'
-      - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:$COMMIT_SHA'
-
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'push'
-      - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:latest'
-
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
