@@ -104,3 +104,40 @@ resource "google_project_iam_member" "compute_aiplatform_user" {
   role    = "roles/aiplatform.user"
   member  = "serviceAccount:${local.default_compute_sa}"
 }
+
+# Grant Cloud Build/deployment permissions to default compute SA
+# (Cloud Build uses compute SA for builds and deployments)
+resource "google_project_iam_member" "compute_run_admin" {
+  project = var.project_id
+  role    = "roles/run.admin"
+  member  = "serviceAccount:${local.default_compute_sa}"
+}
+
+resource "google_project_iam_member" "compute_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${local.default_compute_sa}"
+}
+
+resource "google_project_iam_member" "compute_storage_admin" {
+  project = var.project_id
+  role    = "roles/storage.admin"
+  member  = "serviceAccount:${local.default_compute_sa}"
+}
+
+# Grant service account user role (needed for actAs during Cloud Run deployment)
+resource "google_service_account_iam_member" "compute_sa_user" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${local.default_compute_sa}"
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${local.default_compute_sa}"
+}
+
+# Grant Artifact Registry writer role for pushing Docker images to GCR
+# Note: GCR (gcr.io) is managed by Artifact Registry under the hood
+resource "google_artifact_registry_repository_iam_member" "compute_artifact_writer" {
+  project    = var.project_id
+  location   = "us"
+  repository = "gcr.io"
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${local.default_compute_sa}"
+}
