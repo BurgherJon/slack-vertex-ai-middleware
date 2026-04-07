@@ -328,7 +328,7 @@ class FirestoreService:
     async def list_scheduled_jobs(
         self,
         agent_id: Optional[str] = None,
-        slack_user_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         enabled_only: bool = False,
     ) -> List[ScheduledJob]:
         """
@@ -336,7 +336,7 @@ class FirestoreService:
 
         Args:
             agent_id: Filter by agent ID
-            slack_user_id: Filter by Slack user ID
+            user_id: Filter by user ID
             enabled_only: Only return enabled jobs
 
         Returns:
@@ -347,8 +347,8 @@ class FirestoreService:
 
             if agent_id:
                 query = query.where("agent_id", "==", agent_id)
-            if slack_user_id:
-                query = query.where("slack_user_id", "==", slack_user_id)
+            if user_id:
+                query = query.where("user_id", "==", user_id)
             if enabled_only:
                 query = query.where("enabled", "==", True)
 

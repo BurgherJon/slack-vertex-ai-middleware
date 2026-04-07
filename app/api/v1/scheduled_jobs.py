@@ -96,7 +96,8 @@ async def create_scheduled_job(
             name=job.name,
             prompt=job.prompt,
             agent_id=job.agent_id,
-            slack_user_id=job.slack_user_id,
+            user_id=job.user_id,
+            output_platform=job.output_platform,
             schedule=job.schedule,
             timezone=job.timezone,
             enabled=job.enabled,
@@ -116,7 +117,7 @@ async def create_scheduled_job(
 @router.get("", response_model=ScheduledJobListResponse)
 async def list_scheduled_jobs(
     agent_id: Optional[str] = None,
-    slack_user_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     service: ScheduledJobService = Depends(get_scheduled_job_service),
 ):
     """
@@ -124,9 +125,9 @@ async def list_scheduled_jobs(
 
     Args:
         agent_id: Filter by agent ID
-        slack_user_id: Filter by Slack user ID
+        user_id: Filter by user ID
     """
-    jobs = await service.list_jobs(agent_id=agent_id, slack_user_id=slack_user_id)
+    jobs = await service.list_jobs(agent_id=agent_id, user_id=user_id)
     return ScheduledJobListResponse(
         jobs=[
             ScheduledJobResponse(
@@ -134,7 +135,8 @@ async def list_scheduled_jobs(
                 name=job.name,
                 prompt=job.prompt,
                 agent_id=job.agent_id,
-                slack_user_id=job.slack_user_id,
+                user_id=job.user_id,
+                output_platform=job.output_platform,
                 schedule=job.schedule,
                 timezone=job.timezone,
                 enabled=job.enabled,
@@ -198,7 +200,8 @@ async def update_scheduled_job(
             name=job.name,
             prompt=job.prompt,
             agent_id=job.agent_id,
-            slack_user_id=job.slack_user_id,
+            user_id=job.user_id,
+            output_platform=job.output_platform,
             schedule=job.schedule,
             timezone=job.timezone,
             enabled=job.enabled,
