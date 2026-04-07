@@ -10,6 +10,10 @@ steps:
       - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:latest'
       - '.'
 
+  # Push the image (needed before deploy)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '--all-tags', 'gcr.io/$PROJECT_ID/slack-vertex-middleware']
+
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -28,10 +32,6 @@ steps:
       - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=production,GCP_LOCATION=$_GCP_LOCATION,GCS_BUCKET_NAME=$_GCS_BUCKET_NAME'
       - '--set-secrets'
       - 'SLACK_SIGNING_SECRET=slack-signing-secret:latest'
-
-images:
-  - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:$COMMIT_SHA'
-  - 'gcr.io/$PROJECT_ID/slack-vertex-middleware:latest'
 
 options:
   logging: CLOUD_LOGGING_ONLY
