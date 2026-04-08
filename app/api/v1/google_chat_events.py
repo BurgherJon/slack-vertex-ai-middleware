@@ -41,6 +41,9 @@ async def google_chat_events(
     # Parse JSON
     data = await request.json()
 
+    # Log the raw event for debugging
+    logger.info(f"Received Google Chat event: {data}")
+
     # Handle URL verification (Google Chat sends a CHALLENGE request)
     event_type = data.get("type")
     if event_type == "CHALLENGE":
