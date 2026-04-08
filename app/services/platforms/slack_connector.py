@@ -158,7 +158,7 @@ class SlackConnector(PlatformConnector):
             )
             return {"display_name": user_id}
 
-    async def open_conversation(self, user_id: str) -> str:
+    async def open_conversation(self, user_id: str, space_id: str = None) -> str:
         """
         Open or get existing DM conversation with a user.
 
@@ -167,6 +167,7 @@ class SlackConnector(PlatformConnector):
 
         Args:
             user_id: Slack user ID to open DM with
+            space_id: Optional space/channel ID (for consistency with other connectors, ignored for Slack)
 
         Returns:
             Channel ID for the DM conversation

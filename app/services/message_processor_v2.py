@@ -144,7 +144,10 @@ class MessageProcessorV2:
                 logger.warning(
                     f"All {failed_file_uploads} file upload(s) failed for user {user.id}"
                 )
-                conversation_id = await connector.open_conversation(event.user_id)
+                conversation_id = await connector.open_conversation(
+                    event.user_id,
+                    space_id=event.space_id
+                )
                 await connector.send_message(
                     recipient_id=conversation_id,
                     text="I'm sorry, you tried to send me a file but I don't have any place to put it!",
@@ -202,7 +205,10 @@ class MessageProcessorV2:
                     )
 
             # Open conversation and send response
-            conversation_id = await connector.open_conversation(event.user_id)
+            conversation_id = await connector.open_conversation(
+                event.user_id,
+                space_id=event.space_id
+            )
             await connector.send_message(
                 recipient_id=conversation_id,
                 text=response_text
@@ -217,7 +223,10 @@ class MessageProcessorV2:
             logger.warning(f"Rate limit hit for user {user.id if user else 'unknown'}: {e}")
             try:
                 if user and connector:
-                    conversation_id = await connector.open_conversation(event.user_id)
+                    conversation_id = await connector.open_conversation(
+                        event.user_id,
+                        space_id=event.space_id
+                    )
                     await connector.send_message(
                         recipient_id=conversation_id,
                         text=str(e),

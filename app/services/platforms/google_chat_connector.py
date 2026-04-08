@@ -193,15 +193,17 @@ class GoogleChatConnector(PlatformConnector):
             # Return fallback
             return {"display_name": user_id, "email": None}
 
-    async def open_conversation(self, user_id: str) -> str:
+    async def open_conversation(self, user_id: str, space_id: str = None) -> str:
         """
         Open or get existing DM space with a user.
 
-        For Google Chat, DM spaces are created automatically when a user
-        messages the bot. We can create a DM space programmatically.
+        For Google Chat, when responding to incoming messages, we already have
+        the space_id from the event and can use it directly. For proactive
+        messages (like scheduled jobs), we would need to create a space.
 
         Args:
             user_id: Google Chat user resource name
+            space_id: Optional space ID if already known from incoming event
 
         Returns:
             Space name (resource ID) for the DM conversation
@@ -209,31 +211,21 @@ class GoogleChatConnector(PlatformConnector):
         Raises:
             Exception: If conversation cannot be opened
         """
-        try:
-            service = self._get_chat_service()
+        # If we already have a space_id (from incoming message), use it directly
+        if space_id:
+            logger.debug(f"Using existing space {space_id} for user {user_id}")
+            return space_id
 
-            # Create a DM space with the user
-            # Google Chat API will return existing space if one already exists
-            space = service.spaces().create(
-                body={
-                    'spaceType': 'DM',
-                    'members': [
-                        {'member': {'name': user_id, 'type': 'HUMAN'}}
-                    ]
-                }
-            ).execute()
-
-            space_name = space.get('name')
-            logger.debug(f"Opened DM space with user {user_id}: {space_name}")
-
-            return space_name
-
-        except Exception as e:
-            logger.error(f"Error opening conversation with {user_id}: {e}")
-            # If space creation fails, try to use the user_id as space_id
-            # (this happens when user has already messaged the bot)
-            logger.warning(f"Falling back to using user_id as space identifier")
-            raise
+        # For proactive messages, we'd need to find or create the space
+        # This requires additional scopes beyond chat.bot
+        logger.warning(
+            f"No space_id provided for user {user_id}. "
+            "Proactive messaging not yet implemented for Google Chat."
+        )
+        raise NotImplementedError(
+            "Proactive messaging (without space_id) not yet implemented for Google Chat. "
+            "This would require additional OAuth scopes."
+        )
 
     async def verify_request(self, request: Request) -> bool:
         """
