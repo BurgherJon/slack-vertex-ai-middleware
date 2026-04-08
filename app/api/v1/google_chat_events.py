@@ -41,99 +41,94 @@ async def google_chat_events(
     # Parse JSON
     data = await request.json()
 
-    # Log the raw event for debugging
-    logger.info(f"Received Google Chat event: {data}")
+    # Google Chat events have structure: {chat: {messagePayload: {message: ...}}}
+    # Check if this is a message event
+    chat_data = data.get("chat", {})
+    message_payload = chat_data.get("messagePayload")
 
-    # Handle URL verification (Google Chat sends a CHALLENGE request)
-    event_type = data.get("type")
-    if event_type == "CHALLENGE":
-        # Respond to challenge
-        challenge_token = data.get("token")
-        logger.info("Google Chat URL verification challenge received")
-        return JSONResponse(content={"token": challenge_token})
+    if not message_payload:
+        # Not a message event - could be ADDED_TO_SPACE, REMOVED_FROM_SPACE, etc.
+        logger.info(f"Received non-message Google Chat event: {list(data.keys())}")
+        return JSONResponse(content={"status": "ok"})
 
     # Handle message event
-    if event_type == "MESSAGE":
-        try:
-            message = data.get("message", {})
-            space = message.get("space", {})
-            space_name = space.get("name")
+    try:
+        message = message_payload.get("message", {})
+        space = message.get("space", {})
+        space_name = space.get("name")
 
-            # Ignore bot messages to prevent loops
-            sender = message.get("sender", {})
-            sender_type = sender.get("type")
-            if sender_type == "BOT":
-                logger.debug("Ignoring bot message to prevent loops")
-                return JSONResponse(content={"status": "ok"})
-
-            logger.info(
-                f"Received message event from space: {space_name}, "
-                f"sender: {sender.get('name')}"
-            )
-
-            # Step 1: Identify which agent this message is for
-            # Look up agent by space (for group chats) or by bot name
-            # For DM conversations, we need to find the agent by service account
-
-            # Get all agents and find the one configured for this space
-            # For MVP, we'll use a simpler approach: find agent by checking
-            # if the message was sent to a space where the bot is configured
-
-            # TODO: Implement agent lookup by space or bot ID
-            # For now, we'll try to match by checking which agent has Google Chat enabled
-
-            agents = await firestore.list_agents()
-            agent = None
-            google_chat_config = None
-
-            for candidate_agent in agents:
-                config = candidate_agent.get_google_chat_config()
-                if config and config.enabled:
-                    # For MVP, use the first enabled Google Chat agent
-                    # In production, match by bot name or space
-                    agent = candidate_agent
-                    google_chat_config = config
-                    break
-
-            if not agent or not google_chat_config:
-                logger.error("No agent found with Google Chat configuration")
-                return JSONResponse(content={"status": "ok"})
-
-            # Step 2: Create Google Chat connector with agent's secret reference
-            if not google_chat_config.google_chat_service_account_secret:
-                logger.error(f"Agent {agent.id} has no Google Chat service account secret")
-                return JSONResponse(content={"status": "ok"})
-
-            connector = GoogleChatConnector(
-                service_account_secret_name=google_chat_config.google_chat_service_account_secret
-            )
-
-            # Step 3: Verify request (optional for MVP)
-            # Google Chat webhook verification can be added here
-            # signature_valid = await connector.verify_request(request)
-            # if not signature_valid:
-            #     logger.warning("Invalid Google Chat request signature")
-            #     raise HTTPException(status_code=401, detail="Invalid signature")
-
-            # Step 4: Parse Google Chat event into platform event
-            platform_event = connector.parse_event(data)
-
-            # Step 5: Process event in background
-            background_tasks.add_task(
-                message_processor.process_platform_event,
-                platform_event,
-                connector,
-                agent.id
-            )
-
-            # Return immediately
+        # Ignore bot messages to prevent loops
+        sender = message.get("sender", {})
+        sender_type = sender.get("type")
+        if sender_type == "BOT":
+            logger.debug("Ignoring bot message to prevent loops")
             return JSONResponse(content={"status": "ok"})
 
-        except Exception as e:
-            logger.error(f"Error processing Google Chat event: {e}", exc_info=True)
-            # Still return 200 to acknowledge receipt
+        logger.info(
+            f"Received message event from space: {space_name}, "
+            f"sender: {sender.get('name')}, "
+            f"text: {message.get('text')}"
+        )
+
+        # Step 1: Identify which agent this message is for
+        # Look up agent by space (for group chats) or by bot name
+        # For DM conversations, we need to find the agent by service account
+
+        # Get all agents and find the one configured for this space
+        # For MVP, we'll use a simpler approach: find agent by checking
+        # if the message was sent to a space where the bot is configured
+
+        # TODO: Implement agent lookup by space or bot ID
+        # For now, we'll try to match by checking which agent has Google Chat enabled
+
+        agents = await firestore.list_agents()
+        agent = None
+        google_chat_config = None
+
+        for candidate_agent in agents:
+            config = candidate_agent.get_google_chat_config()
+            if config and config.enabled:
+                # For MVP, use the first enabled Google Chat agent
+                # In production, match by bot name or space
+                agent = candidate_agent
+                google_chat_config = config
+                break
+
+        if not agent or not google_chat_config:
+            logger.error("No agent found with Google Chat configuration")
             return JSONResponse(content={"status": "ok"})
 
-    # Handle other event types (ADDED_TO_SPACE, REMOVED_FROM_SPACE, etc.)
-    logger.info(f"Received Google Chat event type: {event_type}")
-    return JSONResponse(content={"status": "ok"})
+        # Step 2: Create Google Chat connector with agent's secret reference
+        if not google_chat_config.google_chat_service_account_secret:
+            logger.error(f"Agent {agent.id} has no Google Chat service account secret")
+            return JSONResponse(content={"status": "ok"})
+
+        connector = GoogleChatConnector(
+            service_account_secret_name=google_chat_config.google_chat_service_account_secret
+        )
+
+        # Step 3: Verify request (optional for MVP)
+        # Google Chat webhook verification can be added here
+        # signature_valid = await connector.verify_request(request)
+        # if not signature_valid:
+        #     logger.warning("Invalid Google Chat request signature")
+        #     raise HTTPException(status_code=401, detail="Invalid signature")
+
+        # Step 4: Parse Google Chat event into platform event
+        platform_event = connector.parse_event(data)
+
+        # Step 5: Process event in background
+        background_tasks.add_task(
+            message_processor.process_platform_event,
+            platform_event,
+            connector,
+            agent.id
+        )
+
+        # Return immediately
+        return JSONResponse(content={"status": "ok"})
+
+    except Exception as e:
+        logger.error(f"Error processing Google Chat event: {e}", exc_info=True)
+        # Still return 200 to acknowledge receipt
+        return JSONResponse(content={"status": "ok"})
