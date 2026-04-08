@@ -210,9 +210,13 @@ class FirestoreService:
             docs = await self.client.collection(self.agents_collection).get()
             agents = []
             for doc in docs:
-                data = doc.to_dict()
-                agent = Agent(**data, id=doc.id)
-                agents.append(agent)
+                try:
+                    data = doc.to_dict()
+                    agent = Agent(**data, id=doc.id)
+                    agents.append(agent)
+                except Exception as validation_error:
+                    logger.warning(f"Skipping agent {doc.id} due to validation error: {validation_error}")
+                    continue
 
             logger.info(f"Listed {len(agents)} agents")
             return agents
