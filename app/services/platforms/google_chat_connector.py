@@ -271,7 +271,7 @@ class GoogleChatConnector(PlatformConnector):
         Parse Google Chat event into unified PlatformEvent.
 
         Args:
-            data: Google Chat event data
+            data: Google Chat event data (webhook payload)
 
         Returns:
             Normalized PlatformEvent
@@ -279,30 +279,36 @@ class GoogleChatConnector(PlatformConnector):
         Raises:
             ValueError: If event format is invalid
         """
-        # Google Chat event structure:
+        # Google Chat webhook event structure:
         # {
-        #   "type": "MESSAGE",
-        #   "message": {
-        #     "name": "spaces/.../messages/...",
-        #     "sender": {
-        #       "name": "users/12345...",
-        #       "displayName": "User Name",
-        #       "email": "user@example.com"
-        #     },
-        #     "text": "Message text",
-        #     "space": {
-        #       "name": "spaces/AAAA...",
-        #       "type": "DM"
-        #     },
-        #     "attachments": [...]
+        #   "chat": {
+        #     "messagePayload": {
+        #       "message": {
+        #         "name": "spaces/.../messages/...",
+        #         "sender": {
+        #           "name": "users/12345...",
+        #           "displayName": "User Name",
+        #           "email": "user@example.com"
+        #         },
+        #         "text": "Message text",
+        #         "space": {
+        #           "name": "spaces/AAAA...",
+        #           "type": "DM"
+        #         },
+        #         "attachments": [...]
+        #       }
+        #     }
         #   }
         # }
 
-        event_type = data.get("type")
-        if event_type != "MESSAGE":
-            raise ValueError(f"Unsupported Google Chat event type: {event_type}")
+        # Extract message from webhook payload
+        chat_data = data.get("chat", {})
+        message_payload = chat_data.get("messagePayload", {})
+        message = message_payload.get("message", {})
 
-        message = data.get("message", {})
+        if not message:
+            raise ValueError(f"Invalid Google Chat event: missing message payload")
+
         sender = message.get("sender", {})
         space = message.get("space", {})
 
