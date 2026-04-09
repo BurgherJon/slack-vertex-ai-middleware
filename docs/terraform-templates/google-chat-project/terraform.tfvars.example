@@ -1,0 +1,18 @@
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is git-ignored to keep your configuration private
+
+# GCP Project Configuration
+project_id       = "my-agent-chat-prod"        # Must be globally unique
+project_name     = "My Agent Google Chat"
+organization_id  = "123456789012"               # Your GCP org ID
+billing_account  = "ABCD12-34EF56-7890AB"       # Your billing account ID
+region           = "us-central1"
+
+# Bot Configuration
+bot_name         = "My Agent"
+bot_account_id   = "my-agent"                   # lowercase, hyphens only, max 30 chars
+bot_description  = "AI assistant powered by Vertex AI"
+bot_avatar_url   = ""                           # Optional: URL to bot avatar image
+
+# Secret Manager Configuration (for the middleware project)
+secret_name      = "my-agent-credentials"       # Name in middleware's Secret Manager
