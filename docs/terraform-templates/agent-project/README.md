@@ -1,13 +1,25 @@
-# Agent Project - Terraform Template
+# Agent Infrastructure - Terraform Template
 
-This Terraform template creates a dedicated GCP project for an agent that uses Google Chat.
+This Terraform template creates dedicated GCP infrastructure for agents that require it.
 
-## Why a Dedicated Project?
+## Do You Need This?
 
-Some agents may require dedicated GCP projects for various reasons:
-- **Google Chat bots**: Google Chat API has a restriction of one bot per GCP project
-- **Organizational separation**: Isolate agent resources from middleware
-- **Independent lifecycle**: Agents can be created/destroyed without affecting middleware
+**Use this template if your agent:**
+- ✅ Uses Google Chat (REQUIRED - Google Chat API restriction)
+- ✅ Needs dedicated service account for Google APIs (Drive, Sheets, etc.)
+- ✅ Requires organizational separation from middleware
+
+**Skip this template if your agent:**
+- ❌ Only uses Slack (no dedicated infrastructure needed)
+- ❌ Doesn't access Google APIs
+
+## What This Creates
+
+For agents that need dedicated infrastructure, this creates:
+- New GCP project (required for Google Chat bots)
+- Service account with appropriate permissions
+- Required API enablements (Chat, Drive, Sheets, etc.)
+- Organization policy override for service account key creation
 
 ## What This Creates
 
@@ -17,7 +29,20 @@ Some agents may require dedicated GCP projects for various reasons:
 - Organization policy override to allow service account key creation
 - Outputs with next steps for configuration
 
+## Slack-Only Agents
+
+If your agent **only uses Slack** and doesn't need Google APIs:
+
+**You don't need this template!** Simply:
+1. Create your Slack bot in the Slack UI
+2. Store the bot token in the middleware's Secret Manager
+3. Register your agent with the middleware using `scripts/deploy_agent.py`
+
+No dedicated GCP infrastructure required.
+
 ## Prerequisites
+
+For agents that DO need dedicated infrastructure:
 
 - GCP organization ID (Google Chat bots require a Workspace organization)
 - Billing account ID

@@ -1,13 +1,18 @@
-# Google Chat Bot - Dedicated GCP Project Terraform Template
+# Agent Infrastructure - Terraform Template
 #
-# This template creates a dedicated GCP project for a Google Chat bot.
-# Each Google Chat bot requires its own GCP project due to API restrictions.
+# This template creates dedicated infrastructure for agents.
+#
+# STRUCTURE:
+# Section 1: Common infrastructure (all agents)
+# Section 2: Slack-specific infrastructure (uncomment if using Slack)
+# Section 3: Google Chat-specific infrastructure (uncomment if using Google Chat)
 #
 # INSTRUCTIONS:
 # 1. Copy this entire directory to your agent repository
 # 2. Update terraform.tfvars with your specific values
-# 3. Run: terraform init && terraform apply
-# 4. Follow the "next_steps" output for completing configuration
+# 3. Uncomment the sections you need (Slack and/or Google Chat)
+# 4. Run: terraform init && terraform apply
+# 5. Follow the "next_steps" output for completing configuration
 
 terraform {
   required_version = ">= 1.0"
@@ -25,8 +30,12 @@ provider "google" {
   region          = var.region
 }
 
-# Create the GCP Project for your Google Chat bot
-resource "google_project" "chat_project" {
+# ==============================================================================
+# SECTION 1: COMMON INFRASTRUCTURE (Required for all agents)
+# ==============================================================================
+
+# Create the GCP Project
+resource "google_project" "agent_project" {
   name            = var.project_name
   project_id      = var.project_id
   org_id          = var.organization_id
@@ -40,58 +49,50 @@ resource "google_project" "chat_project" {
 
 # Use the created project for subsequent resources
 provider "google" {
-  alias   = "chat"
-  project = google_project.chat_project.project_id
+  alias   = "agent"
+  project = google_project.agent_project.project_id
   region  = var.region
 }
 
-# Enable required APIs
-resource "google_project_service" "chat" {
-  project = google_project.chat_project.project_id
-  service = "chat.googleapis.com"
-
+# Enable Secret Manager API (used by all platforms)
+resource "google_project_service" "secretmanager" {
+  project = google_project.agent_project.project_id
+  service = "secretmanager.googleapis.com"
   disable_on_destroy = false
 }
 
-# OPTIONAL: Enable additional APIs if your agent needs them
-# Uncomment the ones your agent requires
-
-# resource "google_project_service" "drive" {
-#   project = google_project.chat_project.project_id
-#   service = "drive.googleapis.com"
-#   disable_on_destroy = false
-# }
-
-# resource "google_project_service" "sheets" {
-#   project = google_project.chat_project.project_id
-#   service = "sheets.googleapis.com"
-#   disable_on_destroy = false
-# }
-
-# Service Account for your Google Chat bot
-# This SA will be used for Google Chat API calls (sending messages)
-resource "google_service_account" "chat_bot" {
-  project      = google_project.chat_project.project_id
-  account_id   = var.bot_account_id
-  display_name = var.bot_name
-  description  = "Service account for ${var.bot_name} Google Chat bot"
-
-  depends_on = [
-    google_project_service.chat
-  ]
+# Enable Google Drive API (most agents use Google Drive)
+resource "google_project_service" "drive" {
+  project = google_project.agent_project.project_id
+  service = "drive.googleapis.com"
+  disable_on_destroy = false
 }
 
-# Grant Google Chat bot permissions
-resource "google_project_iam_member" "chat_owner" {
-  project = google_project.chat_project.project_id
-  role    = "roles/chat.owner"
-  member  = "serviceAccount:${google_service_account.chat_bot.email}"
+# Enable Google Sheets API (most agents use Google Sheets)
+resource "google_project_service" "sheets" {
+  project = google_project.agent_project.project_id
+  service = "sheets.googleapis.com"
+  disable_on_destroy = false
+}
+
+# Service Account for Google APIs (Drive, Sheets, etc.)
+# This SA will be used by your agent to access Google Drive and Sheets
+resource "google_service_account" "agent_apis" {
+  project      = google_project.agent_project.project_id
+  account_id   = "${var.bot_account_id}-apis"
+  display_name = "${var.bot_name} Google APIs"
+  description  = "Service account for ${var.bot_name} to access Google APIs (Drive, Sheets, etc.)"
+
+  depends_on = [
+    google_project_service.drive,
+    google_project_service.sheets
+  ]
 }
 
 # Allow service account key creation for this project
 # This overrides the organization policy that blocks key creation
 resource "google_project_organization_policy" "allow_sa_key_creation" {
-  project    = google_project.chat_project.project_id
+  project    = google_project.agent_project.project_id
   constraint = "constraints/iam.disableServiceAccountKeyCreation"
 
   boolean_policy {
@@ -99,20 +100,98 @@ resource "google_project_organization_policy" "allow_sa_key_creation" {
   }
 
   depends_on = [
-    google_project.chat_project
+    google_project.agent_project
   ]
 }
 
-# Output the service account email for use in other configurations
-output "service_account_email" {
-  description = "Service account email for the Google Chat bot"
-  value       = google_service_account.chat_bot.email
-}
+# ==============================================================================
+# SECTION 2: SLACK-SPECIFIC INFRASTRUCTURE
+# Uncomment this section if your agent uses Slack
+# ==============================================================================
+
+# # Slack Bot Token Secret
+# resource "google_secret_manager_secret" "slack_bot_token" {
+#   project   = google_project.agent_project.project_id
+#   secret_id = "${var.bot_account_id}-slack-token"
+#
+#   replication {
+#     auto {}
+#   }
+#
+#   depends_on = [
+#     google_project_service.secretmanager
+#   ]
+# }
+
+# Note: The Slack bot token must be added manually after terraform apply:
+# echo -n "xoxb-YOUR-SLACK-BOT-TOKEN" | gcloud secrets versions add ${var.bot_account_id}-slack-token \
+#   --data-file=- --project=${var.project_id}
+
+# ==============================================================================
+# SECTION 3: GOOGLE CHAT-SPECIFIC INFRASTRUCTURE
+# Uncomment this section if your agent uses Google Chat
+# ==============================================================================
+
+# # Enable Google Chat API
+# resource "google_project_service" "chat" {
+#   project = google_project.agent_project.project_id
+#   service = "chat.googleapis.com"
+#   disable_on_destroy = false
+# }
+
+# # Service Account for Google Chat bot
+# # This SA will be used for Google Chat API calls (sending messages)
+# resource "google_service_account" "chat_bot" {
+#   project      = google_project.agent_project.project_id
+#   account_id   = var.bot_account_id
+#   display_name = var.bot_name
+#   description  = "Service account for ${var.bot_name} Google Chat bot"
+#
+#   depends_on = [
+#     google_project_service.chat
+#   ]
+# }
+
+# # Grant Google Chat bot permissions
+# resource "google_project_iam_member" "chat_owner" {
+#   project = google_project.agent_project.project_id
+#   role    = "roles/chat.owner"
+#   member  = "serviceAccount:${google_service_account.chat_bot.email}"
+# }
+
+# # Store Google Chat service account credentials in Secret Manager
+# resource "google_secret_manager_secret" "chat_credentials" {
+#   project   = google_project.agent_project.project_id
+#   secret_id = var.secret_name
+#
+#   replication {
+#     auto {}
+#   }
+#
+#   depends_on = [
+#     google_project_service.secretmanager
+#   ]
+# }
+
+# ==============================================================================
+# OUTPUTS
+# ==============================================================================
 
 output "project_id" {
-  description = "GCP Project ID for the Google Chat bot"
+  description = "GCP Project ID for the agent"
   value       = var.project_id
 }
+
+output "apis_service_account_email" {
+  description = "Service account email for Google APIs (Drive, Sheets) - share your Google Docs with this"
+  value       = google_service_account.agent_apis.email
+}
+
+# Uncomment if using Google Chat
+# output "chat_service_account_email" {
+#   description = "Service account email for Google Chat bot"
+#   value       = google_service_account.chat_bot.email
+# }
 
 output "next_steps" {
   description = "Instructions for completing the setup"
@@ -120,47 +199,82 @@ output "next_steps" {
 
 ==================== NEXT STEPS ====================
 
-1. Create a service account key:
-   gcloud iam service-accounts keys create ${var.bot_account_id}-sa-key.json \
-     --iam-account=${google_service_account.chat_bot.email} \
-     --project=${var.project_id}
+SECTION 1: COMMON SETUP (All agents)
 
-2. Store the key in the middleware project's Secret Manager:
-   # Replace YOUR_MIDDLEWARE_PROJECT with your actual middleware project ID
-   gcloud secrets versions add ${var.secret_name} \
-     --data-file=${var.bot_account_id}-sa-key.json \
-     --project=YOUR_MIDDLEWARE_PROJECT
+1. Review what you uncommented in main.tf and proceed with relevant sections below
 
-   # Securely delete the key file
-   rm -f ${var.bot_account_id}-sa-key.json
+SECTION 2: SLACK SETUP (If using Slack)
 
-3. OPTIONAL: If your agent needs Google Sheets/Drive access:
-   Share Google Sheets with the service account:
-   ${google_service_account.chat_bot.email}
+2a. Store the Slack bot token in Secret Manager:
+    echo -n "xoxb-YOUR-SLACK-BOT-TOKEN" | gcloud secrets versions add ${var.bot_account_id}-slack-token \
+      --data-file=- --project=${var.project_id}
 
-4. Configure Google Chat bot in Console:
-   - Go to: https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat
-   - Project: ${var.project_id}
-   - Click "Configuration"
-   - Bot name: ${var.bot_name}
-   - Avatar URL: ${var.bot_avatar_url}
-   - Description: ${var.bot_description}
-   - Functionality: "Receive 1:1 messages" and "Join spaces and group conversations"
-   - Connection settings: "HTTPS"
-   - Bot URL: YOUR_MIDDLEWARE_URL/api/v1/google-chat/events
-   - Permissions: "Specific people and groups" (add test users)
+2b. Grant middleware access to the Slack token:
+    export MIDDLEWARE_PROJECT_ID="YOUR_MIDDLEWARE_PROJECT"
+    export MIDDLEWARE_PROJECT_NUMBER=$(gcloud projects describe $MIDDLEWARE_PROJECT_ID --format="value(projectNumber)")
+    export MIDDLEWARE_SA="$${MIDDLEWARE_PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-5. Enable Google Chat for your agent in Firestore:
-   python scripts/enable_google_chat_agent.py \
-     --project YOUR_MIDDLEWARE_PROJECT \
-     --agent-id YOUR_AGENT_ID \
-     --secret-name ${var.secret_name} \
-     --google-chat-project-id ${var.project_id}
+    gcloud secrets add-iam-policy-binding ${var.bot_account_id}-slack-token \
+      --member="serviceAccount:$${MIDDLEWARE_SA}" \
+      --role="roles/secretmanager.secretAccessor" \
+      --project=${var.project_id}
 
-6. Test the bot:
-   - Open Google Chat
-   - Search for "${var.bot_name}"
-   - Send a test message
+2c. Register your agent with middleware using the Slack platform configuration
+
+SECTION 3: GOOGLE CHAT SETUP (If using Google Chat)
+
+3a. Create a service account key:
+    gcloud iam service-accounts keys create ${var.bot_account_id}-sa-key.json \
+      --iam-account=SERVICE_ACCOUNT_EMAIL_FROM_OUTPUT \
+      --project=${var.project_id}
+
+3b. Store the key in the middleware project's Secret Manager:
+    export MIDDLEWARE_PROJECT_ID="YOUR_MIDDLEWARE_PROJECT"
+
+    gcloud secrets versions add ${var.secret_name} \
+      --data-file=${var.bot_account_id}-sa-key.json \
+      --project=$MIDDLEWARE_PROJECT_ID
+
+    # Securely delete the key file
+    rm -f ${var.bot_account_id}-sa-key.json
+
+3c. Grant middleware access to the Google Chat credentials:
+    export MIDDLEWARE_PROJECT_NUMBER=$(gcloud projects describe $MIDDLEWARE_PROJECT_ID --format="value(projectNumber)")
+    export MIDDLEWARE_SA="$${MIDDLEWARE_PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+    gcloud secrets add-iam-policy-binding ${var.secret_name} \
+      --member="serviceAccount:$${MIDDLEWARE_SA}" \
+      --role="roles/secretmanager.secretAccessor" \
+      --project=$MIDDLEWARE_PROJECT_ID
+
+3d. Configure Google Chat bot in Console:
+    - Go to: https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat?project=${var.project_id}
+    - Click "Configuration"
+    - Bot name: ${var.bot_name}
+    - Avatar URL: ${var.bot_avatar_url}
+    - Description: ${var.bot_description}
+    - Functionality: "Receive 1:1 messages" and "Join spaces and group conversations"
+    - Connection settings: "App URL"
+    - Bot URL: YOUR_MIDDLEWARE_URL/api/v1/google-chat/events
+    - Permissions: "Specific people and groups" (add test users)
+
+3e. Enable Google Chat for your agent in middleware:
+    python scripts/enable_google_chat_agent.py \
+      --project $MIDDLEWARE_PROJECT_ID \
+      --agent-id YOUR_AGENT_ID \
+      --secret-name ${var.secret_name} \
+      --google-chat-project-id ${var.project_id}
+
+SECTION 4: GOOGLE APIS SETUP (Share Google Drive/Sheets)
+
+4a. Share Google Sheets/Drive files with the Google APIs service account:
+    Service Account Email: ${google_service_account.agent_apis.email}
+
+    Instructions:
+    - Open your Google Sheet or Drive file
+    - Click "Share"
+    - Add the service account email above
+    - Give it "Editor" or "Viewer" access (depending on agent needs)
 
 ====================================================
 
