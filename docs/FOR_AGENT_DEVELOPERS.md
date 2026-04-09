@@ -216,7 +216,7 @@ mkdir google-chat-terraform
 cd google-chat-terraform
 
 # 2. Copy the terraform templates from the middleware repo
-cp /path/to/slack-vertex-ai-middleware/docs/terraform-templates/google-chat-project/* .
+cp /path/to/slack-vertex-ai-middleware/docs/terraform-templates/agent-project/* .
 
 # 3. Create your terraform.tfvars from the example
 cp terraform.tfvars.example terraform.tfvars
@@ -699,7 +699,7 @@ python scripts/deploy_agent.py \
 ```bash
 # 1. Copy terraform templates to your agent repo
 mkdir your-agent-repo/google-chat-terraform
-cp docs/terraform-templates/google-chat-project/* your-agent-repo/google-chat-terraform/
+cp docs/terraform-templates/agent-project/* your-agent-repo/google-chat-terraform/
 
 # 2. Configure terraform.tfvars
 cd your-agent-repo/google-chat-terraform

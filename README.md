@@ -498,7 +498,7 @@ pip install aiohttp
 ### Setup & Infrastructure
 - **[Terraform README](terraform/README.md)** - Middleware infrastructure deployment
 - **[Terraform Templates](docs/terraform-templates/)** - Templates for agent-specific infrastructure
-  - [Google Chat Project Template](docs/terraform-templates/google-chat-project/) - Dedicated GCP project for Google Chat bots
+  - [Agent Project Template](docs/terraform-templates/agent-project/) - Dedicated GCP project for agents requiring separate projects
 - [GCP Setup Guide](docs/GCP_SETUP.md) - GCP project configuration
 
 ### Platform Integration

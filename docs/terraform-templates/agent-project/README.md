@@ -1,23 +1,25 @@
-# Google Chat Bot - Terraform Template
+# Agent Project - Terraform Template
 
-This Terraform template creates a dedicated GCP project for a Google Chat bot.
+This Terraform template creates a dedicated GCP project for an agent that uses Google Chat.
 
 ## Why a Dedicated Project?
 
-Google Chat API has a restriction: **one bot per GCP project**. If you want multiple Google Chat bots, each needs its own project.
+Some agents may require dedicated GCP projects for various reasons:
+- **Google Chat bots**: Google Chat API has a restriction of one bot per GCP project
+- **Organizational separation**: Isolate agent resources from middleware
+- **Independent lifecycle**: Agents can be created/destroyed without affecting middleware
 
 ## What This Creates
 
 - New GCP project
-- Google Chat API enabled
-- Service account for the bot with Chat API permissions
+- Required APIs enabled (customizable per agent)
+- Service account for the agent with necessary permissions
 - Organization policy override to allow service account key creation
 - Outputs with next steps for configuration
 
 ## Prerequisites
 
-- Google Workspace organization (Google Chat bots require Workspace)
-- GCP organization ID
+- GCP organization ID (Google Chat bots require a Workspace organization)
 - Billing account ID
 - Terraform 1.0+
 - `gcloud` CLI authenticated
@@ -28,9 +30,9 @@ Google Chat API has a restriction: **one bot per GCP project**. If you want mult
 
 ```bash
 # In your agent repository
-mkdir -p google-chat-terraform
-cp -r /path/to/middleware/docs/terraform-templates/google-chat-project/* google-chat-terraform/
-cd google-chat-terraform
+mkdir -p terraform
+cp -r /path/to/middleware/docs/terraform-templates/agent-project/* terraform/
+cd terraform
 ```
 
 ### 2. Configure Variables
@@ -44,8 +46,8 @@ Fill in your values:
 - `project_id`: Globally unique ID for the new project
 - `organization_id`: Your GCP organization ID
 - `billing_account`: Your billing account ID
-- `bot_name`: Display name for your bot
-- `bot_account_id`: Service account name (lowercase, hyphens)
+- `agent_name`: Display name for your agent
+- `agent_account_id`: Service account name (lowercase, hyphens)
 - `secret_name`: Name for Secret Manager secret in middleware project
 
 ### 3. Deploy
@@ -61,15 +63,15 @@ terraform apply
 After `terraform apply` completes, follow the "next_steps" output instructions to:
 1. Create service account key
 2. Store key in middleware project's Secret Manager
-3. Configure Google Chat bot in Console
-4. Enable Google Chat in Firestore for your agent
-5. Test the bot
+3. Configure platform-specific settings (Google Chat bot, etc.)
+4. Enable platform in Firestore for your agent
+5. Test the agent
 
 ## Important Notes
 
 - **Security**: The service account key is sensitive. Delete it after storing in Secret Manager.
 - **Organization Policy**: This template overrides the key creation policy for this project only.
-- **Cleanup**: If you delete this project, you'll need to recreate it to re-enable the bot.
+- **Cleanup**: If you delete this project, you'll need to recreate it to re-enable the agent.
 
 ## Example Configuration
 

@@ -142,7 +142,7 @@ echo -n "YOUR_SLACK_SECRET" | gcloud secrets versions add slack-signing-secret \
 ### 2. Configure Agent-Specific Infrastructure
 
 For each agent that uses Google Chat:
-1. See [../docs/terraform-templates/google-chat-project/](../docs/terraform-templates/google-chat-project/) for terraform templates
+1. See [../docs/terraform-templates/agent-project/](../docs/terraform-templates/agent-project/) for terraform templates
 2. Follow [../docs/FOR_AGENT_DEVELOPERS.md](../docs/FOR_AGENT_DEVELOPERS.md) for complete setup instructions
 
 ### 3. Deploy Cloud Run Middleware
