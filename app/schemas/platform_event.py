@@ -28,7 +28,7 @@ class PlatformEvent(BaseModel):
     )
     space_id: str = Field(
         ...,
-        description="Conversation/channel/space identifier"
+        description="Conversation/channel/space identifier (Google Chat space ID or Slack channel ID)"
     )
     files: list[dict[str, Any]] = Field(
         default_factory=list,
