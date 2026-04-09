@@ -15,17 +15,6 @@ FastAPI middleware service that routes messages from **Slack** and **Google Chat
 - **Scalable**: Serverless deployment on Google Cloud Run
 - **Easy Setup**: Comprehensive scripts and documentation
 
-## Current Status
-
-🚧 **Migration In Progress**: Transitioning from personal GCP project to Google Workspace organization to enable Google Chat bot functionality.
-
-- ✅ Multi-platform architecture implemented (Slack + Google Chat)
-- ✅ Terraform infrastructure-as-code complete
-- ✅ Migration guides and scripts ready
-- 🔄 Awaiting Google Workspace setup and infrastructure deployment
-
-See [QUICK_START_MIGRATION.md](docs/QUICK_START_MIGRATION.md) to begin migration.
-
 ## Architecture
 
 ### Message Flow
@@ -81,24 +70,6 @@ All platform-specific logic is isolated in connectors, making it easy to add new
 - ngrok account (free tier, for local development)
 
 ## Quick Start
-
-### Migration Path (Current)
-
-If you're migrating from a personal GCP project to Google Workspace:
-
-1. **Start Here**: [QUICK_START_MIGRATION.md](docs/QUICK_START_MIGRATION.md) (1 hour)
-2. **Detailed Guide**: [MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md) (2-3 days total)
-
-The migration guide covers:
-- Google Workspace setup
-- Terraform infrastructure deployment
-- Vertex AI agent redeployment
-- Data migration
-- Platform integration (Slack + Google Chat)
-
-### New Installation
-
-For a fresh installation with Google Workspace:
 
 ### 1. Clone and Setup
 
@@ -524,20 +495,19 @@ pip install aiohttp
 
 ## Documentation
 
-### Migration & Setup
-- **[Quick Start Migration](docs/QUICK_START_MIGRATION.md)** - Begin GCP→Workspace migration (start here!)
-- **[Migration Guide](docs/MIGRATION_GUIDE.md)** - Complete migration walkthrough
-- **[Terraform README](terraform/README.md)** - Infrastructure-as-Code deployment
+### Setup & Infrastructure
+- **[Terraform README](terraform/README.md)** - Middleware infrastructure deployment
+- **[Terraform Templates](docs/terraform-templates/)** - Templates for agent-specific infrastructure
+  - [Google Chat Project Template](docs/terraform-templates/google-chat-project/) - Dedicated GCP project for Google Chat bots
+- [GCP Setup Guide](docs/GCP_SETUP.md) - GCP project configuration
 
 ### Platform Integration
 - [Slack Setup Guide](docs/SLACK_SETUP.md) - Detailed Slack app creation
-- [Google Chat Setup](docs/GOOGLE_CHAT_SETUP.md) - Google Chat bot configuration
-- [Google Chat Configuration Steps](docs/GOOGLE_CHAT_CONFIGURATION_STEPS.md) - Step-by-step bot setup
+- **[For Agent Developers](docs/FOR_AGENT_DEVELOPERS.md)** - Complete guide for deploying agents (Slack + Google Chat)
+  - Copy this to your agent repository for easy reference
 
-### Development
-- [GCP Setup Guide](docs/GCP_SETUP.md) - GCP project configuration
+### Development & Operations
 - [Agent Deployment](docs/AGENT_DEPLOYMENT.md) - How to deploy/update agents
-- **[For Agent Developers](docs/FOR_AGENT_DEVELOPERS.md)** - Copy to agent repos
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues
 
 ## License
