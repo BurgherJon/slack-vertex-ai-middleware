@@ -44,7 +44,7 @@ async def handle_google_chat_event(
     if not message_payload:
         # Not a message event - could be ADDED_TO_SPACE, REMOVED_FROM_SPACE, etc.
         logger.info(f"Received non-message Google Chat event: {list(data.keys())}")
-        return JSONResponse(content={"status": "ok"})
+        return JSONResponse(content={})
 
     # Handle message event
     try:
@@ -75,18 +75,18 @@ async def handle_google_chat_event(
 
         if not agent:
             logger.error(f"Agent {agent_id} not found")
-            return JSONResponse(content={"status": "ok"})
+            return JSONResponse(content={})
 
         # Get Google Chat config
         google_chat_config = agent.get_google_chat_config()
         if not google_chat_config or not google_chat_config.enabled:
             logger.error(f"Agent {agent_id} does not have Google Chat enabled")
-            return JSONResponse(content={"status": "ok"})
+            return JSONResponse(content={})
 
         # Create Google Chat connector with agent's secret reference
         if not google_chat_config.google_chat_service_account_secret:
             logger.error(f"Agent {agent.id} has no Google Chat service account secret")
-            return JSONResponse(content={"status": "ok"})
+            return JSONResponse(content={})
 
         connector = GoogleChatConnector(
             service_account_secret_name=google_chat_config.google_chat_service_account_secret
@@ -103,13 +103,14 @@ async def handle_google_chat_event(
             agent.id
         )
 
-        # Return immediately
-        return JSONResponse(content={"status": "ok"})
+        # Return empty object to suppress "not responding" message
+        # Google Chat will wait for our async response via the Chat API
+        return JSONResponse(content={})
 
     except Exception as e:
         logger.error(f"Error processing Google Chat event for agent {agent_id}: {e}", exc_info=True)
         # Still return 200 to acknowledge receipt
-        return JSONResponse(content={"status": "ok"})
+        return JSONResponse(content={})
 
 
 @router.post("/events")
@@ -139,7 +140,7 @@ async def google_chat_events(
 
     if not agent_id:
         logger.error("No enabled Google Chat agent found")
-        return JSONResponse(content={"status": "ok"})
+        return JSONResponse(content={})
 
     return await handle_google_chat_event(
         request=request,
