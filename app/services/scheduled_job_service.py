@@ -235,19 +235,19 @@ class ScheduledJobService:
     async def list_jobs(
         self,
         agent_id: Optional[str] = None,
-        slack_user_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> List[ScheduledJob]:
         """
         List jobs with optional filtering.
 
         Args:
             agent_id: Filter by agent ID
-            slack_user_id: Filter by Slack user ID
+            user_id: Filter by user ID
 
         Returns:
             List of ScheduledJob objects
         """
         return await self.firestore.list_scheduled_jobs(
             agent_id=agent_id,
-            slack_user_id=slack_user_id,
+            user_id=user_id,
         )

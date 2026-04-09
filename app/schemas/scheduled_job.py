@@ -10,7 +10,8 @@ class ScheduledJobCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Human-readable job name")
     prompt: str = Field(..., min_length=1, max_length=4000, description="Prompt to send to agent")
     agent_id: str = Field(..., description="Agent ID from agents collection")
-    slack_user_id: str = Field(..., pattern=r"^U[A-Z0-9]+$", description="Slack user ID (U...)")
+    user_id: str = Field(..., description="User ID from users collection")
+    output_platform: str = Field(default="slack", description="Platform to deliver responses to (slack, google_chat)")
     schedule: str = Field(..., description="Cron expression (e.g., '0 9 * * 1-5')")
     timezone: str = Field(default="UTC", description="IANA timezone (e.g., 'America/New_York')")
     enabled: bool = Field(default=True, description="Whether job is active")
@@ -33,7 +34,8 @@ class ScheduledJobResponse(BaseModel):
     name: str
     prompt: str
     agent_id: str
-    slack_user_id: str
+    user_id: str
+    output_platform: str
     schedule: str
     timezone: str
     enabled: bool

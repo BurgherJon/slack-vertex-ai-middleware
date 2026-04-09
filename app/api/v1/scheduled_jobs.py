@@ -18,8 +18,8 @@ from app.schemas.scheduled_job import (
     ScheduledJobUpdate,
 )
 from app.services.scheduled_job_service import ScheduledJobService
-from app.services.scheduled_job_executor import ScheduledJobExecutor
-from app.core.dependencies import get_scheduled_job_service, get_scheduled_job_executor
+from app.services.scheduled_job_executor_v2 import ScheduledJobExecutorV2
+from app.core.dependencies import get_scheduled_job_service, get_scheduled_job_executor_v2
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,8 @@ async def create_scheduled_job(
             name=job.name,
             prompt=job.prompt,
             agent_id=job.agent_id,
-            slack_user_id=job.slack_user_id,
+            user_id=job.user_id,
+            output_platform=job.output_platform,
             schedule=job.schedule,
             timezone=job.timezone,
             enabled=job.enabled,
@@ -116,7 +117,7 @@ async def create_scheduled_job(
 @router.get("", response_model=ScheduledJobListResponse)
 async def list_scheduled_jobs(
     agent_id: Optional[str] = None,
-    slack_user_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     service: ScheduledJobService = Depends(get_scheduled_job_service),
 ):
     """
@@ -124,9 +125,9 @@ async def list_scheduled_jobs(
 
     Args:
         agent_id: Filter by agent ID
-        slack_user_id: Filter by Slack user ID
+        user_id: Filter by user ID
     """
-    jobs = await service.list_jobs(agent_id=agent_id, slack_user_id=slack_user_id)
+    jobs = await service.list_jobs(agent_id=agent_id, user_id=user_id)
     return ScheduledJobListResponse(
         jobs=[
             ScheduledJobResponse(
@@ -134,7 +135,8 @@ async def list_scheduled_jobs(
                 name=job.name,
                 prompt=job.prompt,
                 agent_id=job.agent_id,
-                slack_user_id=job.slack_user_id,
+                user_id=job.user_id,
+                output_platform=job.output_platform,
                 schedule=job.schedule,
                 timezone=job.timezone,
                 enabled=job.enabled,
@@ -198,7 +200,8 @@ async def update_scheduled_job(
             name=job.name,
             prompt=job.prompt,
             agent_id=job.agent_id,
-            slack_user_id=job.slack_user_id,
+            user_id=job.user_id,
+            output_platform=job.output_platform,
             schedule=job.schedule,
             timezone=job.timezone,
             enabled=job.enabled,
@@ -235,7 +238,7 @@ async def execute_scheduled_job(
     job_id: str,
     body: ExecuteJobRequest,
     request: Request,
-    executor: ScheduledJobExecutor = Depends(get_scheduled_job_executor),
+    executor: ScheduledJobExecutorV2 = Depends(get_scheduled_job_executor_v2),
 ):
     """
     Execute a scheduled job.
@@ -258,7 +261,7 @@ async def execute_scheduled_job(
 @router.post("/{job_id}/test")
 async def test_scheduled_job(
     job_id: str,
-    executor: ScheduledJobExecutor = Depends(get_scheduled_job_executor),
+    executor: ScheduledJobExecutorV2 = Depends(get_scheduled_job_executor_v2),
 ):
     """
     Test run a scheduled job.
@@ -280,7 +283,7 @@ async def process_due_jobs(
     request: Request,
     background_tasks: BackgroundTasks,
     service: ScheduledJobService = Depends(get_scheduled_job_service),
-    executor: ScheduledJobExecutor = Depends(get_scheduled_job_executor),
+    executor: ScheduledJobExecutorV2 = Depends(get_scheduled_job_executor_v2),
 ):
     """
     Process all scheduled jobs that are due.

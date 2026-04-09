@@ -55,12 +55,13 @@ class VertexAIService:
             logger.info(f"Created ReasoningEngine instance for: {agent_id}")
         return self._engines[agent_id]
 
-    async def create_session(self, agent_id: str) -> str:
+    async def create_session(self, agent_id: str, user_name: Optional[str] = None) -> str:
         """
         Create a new session in the Reasoning Engine.
 
         Args:
             agent_id: Vertex AI reasoning engine resource name
+            user_name: Optional user's actual name to use as user_id
 
         Returns:
             Session ID from the Reasoning Engine
@@ -68,8 +69,11 @@ class VertexAIService:
         try:
             engine = self._get_engine(agent_id)
 
-            # Generate a user_id for this session
-            user_id = f"slack-user-{uuid.uuid4().hex[:12]}"
+            # Use user's actual name if provided, otherwise generate a random ID
+            if user_name:
+                user_id = user_name
+            else:
+                user_id = f"user-{uuid.uuid4().hex[:12]}"
 
             # Create session in the Reasoning Engine
             loop = asyncio.get_event_loop()
@@ -84,7 +88,7 @@ class VertexAIService:
             # We'll encode both in the session_id we return
             combined_id = f"{user_id}:{session_id}"
 
-            logger.info(f"Created Reasoning Engine session: {combined_id}")
+            logger.info(f"Created Reasoning Engine session for user '{user_name}': {combined_id}")
             return combined_id
 
         except ResourceExhausted as e:

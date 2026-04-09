@@ -1,43 +1,73 @@
-# Slack to Vertex AI Agent Engine Middleware
+# Multi-Platform Vertex AI Agent Middleware
 
-FastAPI middleware service that routes Slack messages to Google Vertex AI Agent Engine and posts responses back. Supports multiple agents with individual Slack bots, automatic session management, and asynchronous message processing.
+FastAPI middleware service that routes messages from **Slack** and **Google Chat** to Google Vertex AI Agent Engine and posts responses back. Supports multiple agents with individual platform identities, automatic session management, cross-platform conversation continuity, and scheduled jobs.
 
 ## Features
 
-- **Multi-Agent Support**: Each agent has its own Slack bot identity
+- **Multi-Platform Support**: Slack and Google Chat with unified architecture
+- **Multi-Agent Support**: Each agent has its own identity on each platform
+- **Cross-Platform Sessions**: Continue conversations across Slack and Google Chat
 - **Session Management**: Automatic session tracking per user+agent combination
-- **Async Processing**: Responds to Slack within 3 seconds, processes in background
-- **Secure**: Slack request signature verification, no secrets in git
+- **Scheduled Jobs**: Proactive agent-initiated messages with rate limiting
+- **Async Processing**: Responds within 3 seconds, processes in background
+- **Infrastructure as Code**: Complete Terraform configuration
+- **Secure**: Request signature verification, Secret Manager integration
 - **Scalable**: Serverless deployment on Google Cloud Run
 - **Easy Setup**: Comprehensive scripts and documentation
 
 ## Architecture
 
+### Message Flow
+
 ```
-User DM → Slack → POST /api/v1/slack/events
-         → Return 200 (< 3s)
-         → BackgroundTask:
-            ├─ Identify agent (Firestore lookup)
-            ├─ Get/create session (Firestore)
-            ├─ Send to Vertex AI
-            └─ Post response to Slack
+User Message
+  ↓
+Platform (Slack or Google Chat)
+  ↓
+POST /api/v1/{platform}/events
+  ↓
+Return 200 OK (< 3s)
+  ↓
+BackgroundTask:
+  ├─ Parse platform event → unified format
+  ├─ Identify agent (Firestore lookup)
+  ├─ Resolve user identity (cross-platform)
+  ├─ Get/create session (Firestore)
+  ├─ Send to Vertex AI Reasoning Engine
+  └─ Post response via platform connector
 ```
+
+### Platform Connectors
+
+The middleware uses a unified `PlatformConnector` interface:
+- **SlackConnector**: Slack Events API integration
+- **GoogleChatConnector**: Google Chat API with service account auth
+
+All platform-specific logic is isolated in connectors, making it easy to add new platforms.
 
 ## Tech Stack
 
 - **Framework**: Python 3.11+ (tested with 3.12) + FastAPI
-- **Hosting**: Google Cloud Run
-- **Database**: Google Firestore (agents registry + session mappings)
+- **Hosting**: Google Cloud Run (serverless)
+- **Database**: Google Firestore (agents, sessions, users, scheduled jobs)
 - **Agent Runtime**: Google Vertex AI Reasoning Engine
-- **Messaging**: Slack Events API (HTTP push)
+- **Messaging**:
+  - Slack Events API (HTTP push)
+  - Google Chat API (HTTP push + service account auth)
+- **Infrastructure**: Terraform (reproducible infrastructure-as-code)
+- **Secrets**: Google Cloud Secret Manager
+- **Storage**: Google Cloud Storage (temporary file uploads)
+- **Scheduling**: Google Cloud Scheduler (cron-based job dispatcher)
 - **Local Dev**: ngrok for tunneling
 
 ## Prerequisites
 
 - Python 3.11 or 3.12
-- Google Cloud account with billing enabled
-- Slack workspace with admin access
-- ngrok account (free tier)
+- **Google Workspace Business** account (for Google Chat bots)
+- Google Cloud project in Workspace organization
+- Slack workspace with admin access (for Slack integration)
+- Terraform 1.0+ (for infrastructure deployment)
+- ngrok account (free tier, for local development)
 
 ## Quick Start
 
@@ -63,14 +93,52 @@ cp .env.example .env
 nano .env
 ```
 
-### 2. Google Cloud Setup
+### 2. Infrastructure Deployment with Terraform
+
+**Recommended**: Use Terraform for reproducible infrastructure:
+
+```bash
+# Navigate to terraform directory
+cd terraform
+
+# Copy and configure variables
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your project ID
+
+# Authenticate
+gcloud auth application-default login
+
+# Create Firestore database (Terraform can't do this)
+export GCP_PROJECT_ID=your-workspace-project-id
+gcloud firestore databases create \
+  --location=us-central1 \
+  --type=firestore-native \
+  --project=$GCP_PROJECT_ID
+
+# Deploy infrastructure
+terraform init
+terraform plan
+terraform apply
+
+# Save outputs
+terraform output -json > ../outputs.json
+```
+
+This creates:
+- All required GCP APIs
+- Service accounts with permissions
+- Secret Manager secrets
+- GCS bucket with lifecycle
+- Cloud Run service
+- Cloud Scheduler job
+
+See [terraform/README.md](terraform/README.md) for details.
+
+**Alternative**: Manual setup (legacy, not recommended):
 
 ```bash
 # Set your project ID
 export GCP_PROJECT_ID=your-project-id
-
-# Create or select GCP project
-gcloud projects create $GCP_PROJECT_ID  # Or use existing project
 gcloud config set project $GCP_PROJECT_ID
 
 # Enable required APIs
@@ -78,18 +146,17 @@ gcloud services enable \
   firestore.googleapis.com \
   aiplatform.googleapis.com \
   run.googleapis.com \
-  cloudbuild.googleapis.com
+  cloudbuild.googleapis.com \
+  secretmanager.googleapis.com \
+  chat.googleapis.com \
+  cloudscheduler.googleapis.com
 
-# Authenticate for local development (do this BEFORE creating Firestore)
-gcloud auth application-default login
-
-# Create Firestore database (REQUIRED before running setup_firestore.py)
-# This step MUST be done before the setup script
+# Create Firestore database
 gcloud firestore databases create \
   --location=us-central1 \
   --type=firestore-native
 
-# Initialize Firestore collections (only run AFTER database is created)
+# Initialize Firestore collections
 python scripts/setup_firestore.py --project-id $GCP_PROJECT_ID
 ```
 
@@ -367,11 +434,30 @@ curl -s https://slack.com/api/auth.test \
   -H "Authorization: Bearer xoxb-your-token" | jq .user_id
 ```
 
-### "Slack verification failed"
+### "Slack verification failed" or 401 Unauthorized errors
 
-- Check signing secret is correct in `.env`
-- If you have multiple Slack bots, ensure all signing secrets are listed (comma-separated) in `SLACK_SIGNING_SECRET`
-- Ensure middleware is running and accessible
+**Symptoms**: Bot doesn't respond to messages, logs show "Invalid Slack signature" or "401 Unauthorized"
+
+**Cause**: Each Slack app has its own signing secret. If you have multiple bots and haven't configured all their signing secrets, some bots will be rejected.
+
+**Solution**:
+1. Check logs to see which bot is failing:
+   ```bash
+   gcloud run logs read slack-vertex-middleware --region us-central1 --limit 50 | grep "401\|Invalid"
+   ```
+2. Ensure **all** Slack signing secrets are in your `.env` file (comma-separated):
+   ```bash
+   SLACK_SIGNING_SECRET=secret1,secret2,secret3
+   ```
+3. Get signing secrets from each Slack app:
+   - Go to https://api.slack.com/apps → Your app → Basic Information
+   - Copy "Signing Secret" under "App Credentials"
+4. Redeploy after updating `.env`:
+   ```bash
+   ./scripts/deploy_middleware.sh
+   ```
+
+**Note**: The middleware verifies incoming webhook signatures against all configured signing secrets to support multiple Slack apps.
 
 ### "URL verification failed" (Slack)
 
@@ -409,10 +495,19 @@ pip install aiohttp
 
 ## Documentation
 
-- [Slack Setup Guide](docs/SLACK_SETUP.md) - Detailed Slack app creation
+### Setup & Infrastructure
+- **[Terraform README](terraform/README.md)** - Middleware infrastructure deployment
+- **[Terraform Templates](docs/terraform-templates/)** - Templates for agent-specific infrastructure
+  - [Agent Project Template](docs/terraform-templates/agent-project/) - Dedicated GCP project for agents requiring separate projects
 - [GCP Setup Guide](docs/GCP_SETUP.md) - GCP project configuration
+
+### Platform Integration
+- [Slack Setup Guide](docs/SLACK_SETUP.md) - Detailed Slack app creation
+- **[For Agent Developers](docs/FOR_AGENT_DEVELOPERS.md)** - Complete guide for deploying agents (Slack + Google Chat)
+  - Copy this to your agent repository for easy reference
+
+### Development & Operations
 - [Agent Deployment](docs/AGENT_DEPLOYMENT.md) - How to deploy/update agents
-- [For Agent Developers](docs/FOR_AGENT_DEVELOPERS.md) - **Copy to agent repos**
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues
 
 ## License

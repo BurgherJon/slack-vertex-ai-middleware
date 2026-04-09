@@ -1,22 +1,23 @@
 # Agent Deployment - Middleware Integration
 
-This guide covers how to integrate your Vertex AI agent with the Slack middleware layer.
+This guide covers how to integrate your Vertex AI agent with the multi-platform middleware, supporting both Slack and Google Chat.
 
 ⚠️ **IMPORTANT**: Copy this file to your agent repository (e.g., `growth-coach-agent/MIDDLEWARE_INTEGRATION.md`) so you see it when working on the agent!
 
 ## Table of Contents
 
-1. [Creating a Brand New Agent](#creating-a-brand-new-agent)
-2. [Updating an Existing Agent](#updating-an-existing-agent)
-3. [Troubleshooting](#troubleshooting)
-4. [Quick Reference](#quick-reference)
-5. [Receiving Images from Slack](#receiving-images-from-slack)
-6. [Setting Up GCS for Image Storage](#setting-up-gcs-for-image-storage)
-7. [Building Scheduled Job Tools](#building-scheduled-job-tools)
+1. [Creating a Brand New Agent - Slack](#creating-a-brand-new-agent---slack)
+2. [Creating a Brand New Agent - Google Chat](#creating-a-brand-new-agent---google-chat)
+3. [Updating an Existing Agent](#updating-an-existing-agent)
+4. [Troubleshooting](#troubleshooting)
+5. [Quick Reference](#quick-reference)
+6. [Receiving Images from Slack](#receiving-images-from-slack)
+7. [Setting Up GCS for Image Storage](#setting-up-gcs-for-image-storage)
+8. [Building Scheduled Job Tools](#building-scheduled-job-tools)
 
 ---
 
-## Creating a Brand New Agent
+## Creating a Brand New Agent - Slack
 
 Follow these steps when creating a completely new agent and want to make it available via Slack.
 
@@ -183,6 +184,297 @@ python /path/to/slack_to_agent_integration/scripts/deploy_agent.py \\
   --slack-bot-id "B01234567" \\
   --slack-bot-token "$MY_NEW_AGENT_SLACK_TOKEN"
 \`\`\`
+```
+
+---
+
+## Creating a Brand New Agent - Google Chat
+
+Follow these steps when creating a completely new agent and want to make it available via Google Chat.
+
+### Overview
+
+Google Chat bots have a unique requirement: **each bot needs its own dedicated GCP project**. This is due to Google Chat API restrictions. The middleware provides terraform templates to automate the infrastructure setup.
+
+### Prerequisites
+
+Before starting, ensure you have:
+- GCP Organization ID
+- Billing Account ID
+- Permissions to create projects in your organization
+- Docker installed (for running terraform)
+- Your agent deployed to Vertex AI (Reasoning Engine)
+
+### Step 1: Set Up Your Agent's Google Chat Infrastructure
+
+Each Google Chat bot requires its own GCP project. We provide terraform templates to automate this.
+
+```bash
+# 1. Create a terraform directory in your agent's repository
+cd /path/to/your-agent-repo
+mkdir google-chat-terraform
+cd google-chat-terraform
+
+# 2. Copy the terraform templates from the middleware repo
+cp /path/to/slack-vertex-ai-middleware/docs/terraform-templates/agent-project/* .
+
+# 3. Create your terraform.tfvars from the example
+cp terraform.tfvars.example terraform.tfvars
+
+# 4. Edit terraform.tfvars with your agent's details
+nano terraform.tfvars
+```
+
+**Example terraform.tfvars for your agent:**
+
+```terraform
+# Copy this and customize for your agent
+project_id       = "my-agent-chat-prod"      # Must be globally unique
+project_name     = "My Agent Google Chat"
+organization_id  = "123456789012"            # Your GCP org ID
+billing_account  = "ABCD12-34EF56-7890AB"    # Your billing account
+region           = "us-central1"
+
+bot_name         = "My Agent"
+bot_account_id   = "my-agent"                # Lowercase, hyphens only
+bot_description  = "AI assistant powered by Vertex AI"
+bot_avatar_url   = ""                        # Optional: URL to bot avatar image
+
+secret_name      = "my-agent-credentials"    # Name for Secret Manager secret
+```
+
+### Step 2: Deploy the Infrastructure with Terraform
+
+```bash
+# Still in your-agent-repo/google-chat-terraform/
+
+# Run terraform using Docker (works on all platforms including ARM64)
+TERRAFORM_IMAGE="hashicorp/terraform:1.5"
+
+# Initialize terraform
+docker run --rm \
+    -v "$(pwd):/workspace" \
+    -v "$HOME/.config/gcloud:/root/.config/gcloud" \
+    -w /workspace \
+    $TERRAFORM_IMAGE init
+
+# Review the plan
+docker run --rm \
+    -v "$(pwd):/workspace" \
+    -v "$HOME/.config/gcloud:/root/.config/gcloud" \
+    -w /workspace \
+    $TERRAFORM_IMAGE plan
+
+# Apply the configuration
+docker run --rm -it \
+    -v "$(pwd):/workspace" \
+    -v "$HOME/.config/gcloud:/root/.config/gcloud" \
+    -w /workspace \
+    $TERRAFORM_IMAGE apply
+
+# Terraform will create:
+# - New GCP project for your Google Chat bot
+# - Service account for the bot
+# - Required API enablements (Chat, Drive, Sheets if uncommented)
+# - Organization policy to allow service account key creation
+# - Output with next steps
+```
+
+### Step 3: Create and Store Service Account Key
+
+After terraform completes, you'll see output with next steps. Follow them to create the service account key:
+
+```bash
+# Get the service account email from terraform output
+export BOT_SA_EMAIL=$(docker run --rm \
+    -v "$(pwd):/workspace" \
+    -v "$HOME/.config/gcloud:/root/.config/gcloud" \
+    -w /workspace \
+    $TERRAFORM_IMAGE output -raw service_account_email)
+
+export BOT_PROJECT_ID=$(docker run --rm \
+    -v "$(pwd):/workspace" \
+    -v "$HOME/.config/gcloud:/root/.config/gcloud" \
+    -w /workspace \
+    $TERRAFORM_IMAGE output -raw project_id)
+
+# Create the service account key
+gcloud iam service-accounts keys create my-agent-sa-key.json \
+  --iam-account=$BOT_SA_EMAIL \
+  --project=$BOT_PROJECT_ID
+
+# Store it in the middleware project's Secret Manager
+# Replace 'vertex-ai-middleware-prod' with your middleware project ID
+gcloud secrets versions add my-agent-credentials \
+  --data-file=my-agent-sa-key.json \
+  --project=vertex-ai-middleware-prod
+
+# IMPORTANT: Delete the local key file for security
+rm -f my-agent-sa-key.json
+
+# Grant the middleware's Cloud Run service account access to this secret
+# (if not already done in middleware terraform)
+export MIDDLEWARE_PROJECT_ID="vertex-ai-middleware-prod"
+export MIDDLEWARE_PROJECT_NUMBER=$(gcloud projects describe $MIDDLEWARE_PROJECT_ID --format="value(projectNumber)")
+export MIDDLEWARE_SA="${MIDDLEWARE_PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+gcloud secrets add-iam-policy-binding my-agent-credentials \
+  --member="serviceAccount:${MIDDLEWARE_SA}" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project=$MIDDLEWARE_PROJECT_ID
+```
+
+### Step 4: Configure Google Chat Bot
+
+Now configure the Google Chat bot in the GCP Console:
+
+```bash
+# Open the Google Chat configuration page
+echo "Go to: https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat?project=$BOT_PROJECT_ID"
+
+# Then follow these steps:
+# 1. Click "Configuration"
+# 2. Fill in bot details:
+#    - Bot name: My Agent (use your bot name)
+#    - Avatar URL: (optional, your bot's avatar image)
+#    - Description: AI assistant powered by Vertex AI
+# 3. Functionality:
+#    - ✓ Receive 1:1 messages
+#    - ✓ Join spaces and group conversations
+# 4. Connection settings:
+#    - Select "App URL"
+#    - Bot URL: https://YOUR_MIDDLEWARE_URL/api/v1/google-chat/events
+#    - Example: https://slack-vertex-middleware-404939446326.us-central1.run.app/api/v1/google-chat/events
+# 5. Permissions:
+#    - "Specific people and groups" (add test users for now)
+#    - Or "Anyone in your domain" for broader access
+# 6. Click "Save"
+```
+
+### Step 5: Enable Google Chat in Middleware
+
+Register your agent with the middleware and enable the Google Chat platform:
+
+```bash
+cd /path/to/slack-vertex-ai-middleware
+
+# Get your agent's Firestore ID
+# If you don't know it, list all agents:
+gcloud firestore documents list agents --project=vertex-ai-middleware-prod
+
+# Enable Google Chat for your agent
+python scripts/enable_google_chat_agent.py \
+  --project vertex-ai-middleware-prod \
+  --agent-id "YOUR_AGENT_FIRESTORE_ID" \
+  --secret-name "my-agent-credentials" \
+  --google-chat-project-id "$BOT_PROJECT_ID"
+
+# This script will:
+# 1. Add Google Chat platform configuration to your agent in Firestore
+# 2. Reference the service account credentials secret
+# 3. Enable the platform
+```
+
+### Step 6: Share Google Sheets (If Needed)
+
+If your agent uses Google Sheets (via tools or Reasoning Engine), share those sheets with the bot's service account:
+
+```bash
+# The service account email is in the terraform output:
+echo $BOT_SA_EMAIL
+
+# Share your Google Sheets with this email address:
+# - Open the Google Sheet
+# - Click "Share"
+# - Add the service account email
+# - Give it "Editor" or "Viewer" access (depending on needs)
+```
+
+### Step 7: Test Your Google Chat Bot
+
+```bash
+# 1. Open Google Chat (web or mobile app)
+# 2. Click "+" to start a new chat
+# 3. Search for your bot name (e.g., "My Agent")
+# 4. Send it a test message: "Hello!"
+# 5. You should get a response from your Vertex AI agent
+
+# Check logs if no response:
+gcloud run logs read slack-vertex-middleware \
+  --project vertex-ai-middleware-prod \
+  --region us-central1 \
+  --limit 50
+```
+
+### What Happens Behind the Scenes
+
+When a user messages your Google Chat bot:
+
+1. Google Chat sends the event to the middleware's `/api/v1/google-chat/events` endpoint
+2. Middleware looks up your agent in Firestore (using the Google Chat space info)
+3. Middleware retrieves the service account credentials from Secret Manager
+4. Middleware creates/retrieves a session for the user
+5. Middleware sends the message to your Vertex AI agent
+6. Middleware streams the response back to Google Chat using the bot's service account
+
+### Platform Configuration in Firestore
+
+After running `enable_google_chat_agent.py`, your agent document in Firestore will have a `platforms` array like this:
+
+```json
+{
+  "name": "My Agent",
+  "vertex_ai_agent_id": "projects/.../reasoningEngines/...",
+  "platforms": [
+    {
+      "platform": "google_chat",
+      "enabled": true,
+      "google_chat_service_account_secret": "my-agent-credentials"
+    }
+  ]
+}
+```
+
+You can have multiple platforms enabled (e.g., both Slack and Google Chat).
+
+### Troubleshooting Google Chat Setup
+
+**Bot doesn't appear in Google Chat search:**
+- Verify the bot is configured in the correct GCP project
+- Check "Permissions" allows your test users
+- Wait a few minutes for Google's systems to index the bot
+
+**"The bot didn't respond" error:**
+- Check middleware logs for errors
+- Verify the bot URL is correct in Google Chat configuration
+- Ensure the middleware is deployed and accessible
+- Verify the secret name matches in both terraform and enable script
+
+**Permission denied errors:**
+- Verify the service account key is stored in Secret Manager
+- Check the middleware's Cloud Run SA has `secretAccessor` role
+- Ensure Google Sheets are shared with the bot's service account
+
+**Agent responds but can't access Google Sheets:**
+- Verify you shared the sheets with the bot's service account email
+- Check the bot has "Editor" or "Viewer" permissions on the sheets
+- Verify Drive and Sheets APIs are enabled (uncomment in terraform if needed)
+
+### Documentation
+
+Keep this terraform configuration in your agent repository:
+
+```bash
+# Your agent repo structure should look like:
+your-agent-repo/
+├── google-chat-terraform/
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── terraform.tfvars      # Your configuration (gitignored)
+│   ├── terraform.tfvars.example
+│   └── README.md
+├── agent.py                   # Your agent code
+└── MIDDLEWARE_INTEGRATION.md  # Copy of this guide
 ```
 
 ---
@@ -373,7 +665,7 @@ See the middleware repo for complete documentation:
 
 ## Quick Reference
 
-### Create New Agent
+### Create New Agent - Slack
 
 ```bash
 # 1. Create Slack bot (use template manifest)
@@ -400,6 +692,45 @@ python scripts/deploy_agent.py \
 # (Set Request URL via Slack web UI)
 
 # 7. Test with DM in Slack
+```
+
+### Create New Agent - Google Chat
+
+```bash
+# 1. Copy terraform templates to your agent repo
+mkdir your-agent-repo/google-chat-terraform
+cp docs/terraform-templates/agent-project/* your-agent-repo/google-chat-terraform/
+
+# 2. Configure terraform.tfvars
+cd your-agent-repo/google-chat-terraform
+cp terraform.tfvars.example terraform.tfvars
+nano terraform.tfvars  # Edit with your values
+
+# 3. Run terraform
+TERRAFORM_IMAGE="hashicorp/terraform:1.5"
+docker run --rm -v "$(pwd):/workspace" -v "$HOME/.config/gcloud:/root/.config/gcloud" -w /workspace $TERRAFORM_IMAGE init
+docker run --rm -it -v "$(pwd):/workspace" -v "$HOME/.config/gcloud:/root/.config/gcloud" -w /workspace $TERRAFORM_IMAGE apply
+
+# 4. Create and store service account key
+gcloud iam service-accounts keys create my-agent-sa-key.json \
+  --iam-account=SERVICE_ACCOUNT_EMAIL \
+  --project=BOT_PROJECT_ID
+gcloud secrets versions add my-agent-credentials \
+  --data-file=my-agent-sa-key.json \
+  --project=vertex-ai-middleware-prod
+rm -f my-agent-sa-key.json
+
+# 5. Configure Google Chat bot
+# (Use GCP Console - see detailed steps above)
+
+# 6. Enable Google Chat in middleware
+python scripts/enable_google_chat_agent.py \
+  --project vertex-ai-middleware-prod \
+  --agent-id "FIRESTORE_AGENT_ID" \
+  --secret-name "my-agent-credentials" \
+  --google-chat-project-id "BOT_PROJECT_ID"
+
+# 7. Test in Google Chat
 ```
 
 ### Update Existing Agent
