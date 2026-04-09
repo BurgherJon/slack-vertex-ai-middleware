@@ -6,14 +6,15 @@ This directory contains Terraform configuration for deploying the complete GCP i
 
 - **APIs**: All required GCP APIs (Firestore, Vertex AI, Cloud Run, Secret Manager, etc.)
 - **Service Accounts**:
-  - `growth-coach-sheets` (Google Chat + Drive access)
-  - `sommelier-sheets` (Google Chat + Drive access)
   - `scheduler-sa` (Cloud Scheduler invoker)
-- **IAM Permissions**: All necessary roles and permissions
-- **Secret Manager**: Secret definitions for credentials and API keys
+  - Default Compute SA (used by Cloud Run with necessary permissions)
+- **IAM Permissions**: All necessary roles and permissions for middleware
+- **Secret Manager**: Slack signing secret placeholder
 - **GCS Bucket**: Temporary storage for Slack file uploads (1-day lifecycle)
 - **Cloud Run**: Middleware service deployment
 - **Cloud Scheduler**: Scheduled job dispatcher (runs every minute)
+
+**Note**: Agent-specific infrastructure (like Google Chat bot service accounts) should be created in separate terraform configurations. See [../docs/terraform-templates/](../docs/terraform-templates/) for templates.
 
 ## Prerequisites
 
@@ -122,49 +123,33 @@ The outputs include:
 
 After `terraform apply` completes, you must:
 
-### 1. Generate Service Account Keys
-
-```bash
-# Growth Coach
-gcloud iam service-accounts keys create growth-coach-sa-key.json \
-  --iam-account=$(terraform output -raw growth_coach_service_account_email)
-
-# Sommelier
-gcloud iam service-accounts keys create sommelier-sa-key.json \
-  --iam-account=$(terraform output -raw sommelier_service_account_email)
-```
-
-### 2. Store Keys in Secret Manager
+### 1. Add Slack Signing Secret(s)
 
 ```bash
 PROJECT_ID=$(terraform output -raw project_id)
 
-# Growth Coach credentials
-gcloud secrets versions add growth-coach-credentials \
-  --data-file=growth-coach-sa-key.json \
-  --project=$PROJECT_ID
-
-# Sommelier credentials
-gcloud secrets versions add sommelier-credentials \
-  --data-file=sommelier-sa-key.json \
-  --project=$PROJECT_ID
-
-# Delete local key files
-rm -f growth-coach-sa-key.json sommelier-sa-key.json
-```
-
-### 3. Add Slack Signing Secret
-
-```bash
-# Get the comma-separated list of Slack signing secrets from old project
-OLD_SECRET=$(gcloud secrets versions access latest \
-  --secret=slack-signing-secret \
-  --project=playingwithai-460811)
-
-# Store in new project
-echo -n "$OLD_SECRET" | gcloud secrets versions add slack-signing-secret \
+# Add your Slack app signing secret(s) - comma-separated if multiple
+echo -n "YOUR_SLACK_SECRET" | gcloud secrets versions add slack-signing-secret \
   --data-file=- \
   --project=$PROJECT_ID
+
+# If you have multiple Slack apps:
+# echo -n "secret1,secret2,secret3" | gcloud secrets versions add slack-signing-secret \
+#   --data-file=- \
+#   --project=$PROJECT_ID
+```
+
+### 2. Configure Agent-Specific Infrastructure
+
+For each agent that uses Google Chat:
+1. See [../docs/terraform-templates/google-chat-project/](../docs/terraform-templates/google-chat-project/) for terraform templates
+2. Follow [../docs/FOR_AGENT_DEVELOPERS.md](../docs/FOR_AGENT_DEVELOPERS.md) for complete setup instructions
+
+### 3. Deploy Cloud Run Middleware
+
+```bash
+cd ..
+gcloud builds submit --config cloudbuild.yaml --project $PROJECT_ID
 ```
 
 ## Updating Infrastructure
@@ -193,7 +178,8 @@ terraform state list
 
 ```bash
 terraform output cloud_run_url
-terraform output growth_coach_service_account_email
+terraform output slack_webhook_url
+terraform output google_chat_webhook_url
 ```
 
 ### Refresh State
@@ -260,12 +246,11 @@ terraform/
 ## Next Steps
 
 After Terraform deployment:
-1. Deploy Vertex AI agents to new project
-2. Deploy Cloud Run middleware
-3. Import Firestore data from old project
-4. Share Google Drive files with new service accounts
-5. Update Slack webhook URLs
-6. Configure Google Chat bots
-7. Test all integrations
+1. Deploy Cloud Run middleware (see Post-Deployment Steps above)
+2. Deploy your Vertex AI agents
+3. Register agents with middleware using `scripts/deploy_agent.py`
+4. For Google Chat bots: follow agent-specific terraform setup (see ../docs/FOR_AGENT_DEVELOPERS.md)
+5. Configure Slack Event Subscriptions with webhook URLs
+6. Test all integrations
 
-See the main project README for detailed migration steps.
+See ../docs/FOR_AGENT_DEVELOPERS.md for complete agent deployment guide.

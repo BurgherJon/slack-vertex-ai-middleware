@@ -1,56 +1,9 @@
-# Service Accounts Configuration
-
-# Growth Coach Service Account
-resource "google_service_account" "growth_coach" {
-  account_id   = "growth-coach-sheets"
-  display_name = "Growth Coach Sheets"
-  description  = "Service account for Growth Coach agent (Google Drive/Sheets and Google Chat access)"
-
-  depends_on = [
-    google_project_service.chat
-  ]
-}
-
-# Grant Google Chat bot permissions to Growth Coach (new project SA)
-resource "google_project_iam_member" "growth_coach_chat_owner" {
-  project = var.project_id
-  role    = "roles/chat.owner"
-  member  = "serviceAccount:${google_service_account.growth_coach.email}"
-}
-
-# Grant Google Chat bot permissions to old project Growth Coach SA
-# This is the SA that has Google Sheets access and is used by the reasoning engine
-resource "google_project_iam_member" "growth_coach_old_chat_owner" {
-  project = var.project_id
-  role    = "roles/chat.owner"
-  member  = "serviceAccount:growth-coach-sheets@playingwithai-460811.iam.gserviceaccount.com"
-}
-
-# Sam the Sommelier Service Account
-resource "google_service_account" "sommelier" {
-  account_id   = "sommelier-sheets"
-  display_name = "Sommelier Sheets"
-  description  = "Service account for Sam the Sommelier agent (Google Drive/Sheets and Google Chat access)"
-
-  depends_on = [
-    google_project_service.chat
-  ]
-}
-
-# Grant Google Chat bot permissions to Sommelier (new project SA)
-resource "google_project_iam_member" "sommelier_chat_owner" {
-  project = var.project_id
-  role    = "roles/chat.owner"
-  member  = "serviceAccount:${google_service_account.sommelier.email}"
-}
-
-# Grant Google Chat bot permissions to old project Sommelier SA
-# This is the SA that has Google Sheets access and is used by the reasoning engine
-resource "google_project_iam_member" "sommelier_old_chat_owner" {
-  project = var.project_id
-  role    = "roles/chat.owner"
-  member  = "serviceAccount:sommelier-sheets@playingwithai-460811.iam.gserviceaccount.com"
-}
+# Service Accounts Configuration for Middleware
+#
+# IMPORTANT: This file contains ONLY the service accounts needed by the middleware itself.
+# Agent-specific service accounts (for Google Chat bots, etc.) should be defined in
+# separate terraform directories in each agent's repository.
+# See docs/FOR_AGENT_DEVELOPERS.md for instructions.
 
 # Cloud Scheduler Service Account
 resource "google_service_account" "scheduler" {
@@ -95,17 +48,14 @@ resource "google_secret_manager_secret_iam_member" "compute_slack_signing_secret
   member    = "serviceAccount:${local.default_compute_sa}"
 }
 
-resource "google_secret_manager_secret_iam_member" "compute_growth_coach_creds" {
-  secret_id = google_secret_manager_secret.growth_coach_credentials.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${local.default_compute_sa}"
-}
-
-resource "google_secret_manager_secret_iam_member" "compute_sommelier_creds" {
-  secret_id = google_secret_manager_secret.sommelier_credentials.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${local.default_compute_sa}"
-}
+# Note: Agent-specific secret access (like agent Google Chat credentials) should be
+# granted when you create those secrets. The middleware's Cloud Run service account
+# needs access to agent secrets at runtime.
+# Example command:
+# gcloud secrets add-iam-policy-binding your-agent-credentials \
+#   --member="serviceAccount:${local.default_compute_sa}" \
+#   --role="roles/secretmanager.secretAccessor" \
+#   --project=YOUR_MIDDLEWARE_PROJECT_ID
 
 # Grant GCS access to default compute SA
 resource "google_storage_bucket_iam_member" "compute_storage_admin" {
