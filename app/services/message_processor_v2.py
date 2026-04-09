@@ -173,7 +173,8 @@ class MessageProcessorV2:
                 user_id=user.id,
                 agent_id=agent_id,
                 vertex_ai_agent_id=agent.vertex_ai_agent_id,
-                platform=event.platform
+                platform=event.platform,
+                user_name=user.primary_name
             )
 
             # Step 3: Send message to Vertex AI Agent Engine
@@ -242,7 +243,8 @@ class MessageProcessorV2:
         user_id: str,
         agent_id: str,
         vertex_ai_agent_id: str,
-        platform: str
+        platform: str,
+        user_name: str = None
     ) -> str:
         """
         Get existing session or create new one for unified user.
@@ -252,6 +254,7 @@ class MessageProcessorV2:
             agent_id: Agent ID from agents collection
             vertex_ai_agent_id: Vertex AI agent resource name
             platform: Platform this message came from
+            user_name: User's actual name to pass to the Reasoning Engine
 
         Returns:
             Vertex AI session ID
@@ -275,7 +278,11 @@ class MessageProcessorV2:
             return session.vertex_ai_session_id
 
         # No existing session, create new one in Vertex AI
-        vertex_session_id = await self.vertex_ai.create_session(vertex_ai_agent_id)
+        # Pass user's actual name so the agent can recognize them
+        vertex_session_id = await self.vertex_ai.create_session(
+            vertex_ai_agent_id,
+            user_name=user_name
+        )
 
         # Store in Firestore
         await self.firestore.create_session_for_user(
