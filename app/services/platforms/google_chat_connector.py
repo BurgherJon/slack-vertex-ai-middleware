@@ -25,14 +25,17 @@ class GoogleChatConnector(PlatformConnector):
     user info retrieval, and webhook verification.
     """
 
-    def __init__(self, service_account_secret_name: str):
+    def __init__(self, service_account_secret_name: str, project_id: Optional[str] = None):
         """
         Initialize Google Chat connector.
 
         Args:
             service_account_secret_name: Secret Manager secret name (e.g., 'growth-coach-credentials')
+            project_id: Optional GCP project ID where the secret is stored.
+                       If not provided, uses the middleware's project ID (backward compatibility)
         """
         self.service_account_secret_name = service_account_secret_name
+        self.project_id = project_id
         self.credentials = None
         self._init_credentials()
 
@@ -41,9 +44,12 @@ class GoogleChatConnector(PlatformConnector):
         try:
             settings = get_settings()
 
+            # Use provided project_id or fall back to middleware project (backward compatibility)
+            project_id = self.project_id or settings.gcp_project_id
+
             # Load service account JSON from Secret Manager
             client = secretmanager.SecretManagerServiceClient()
-            secret_path = f"projects/{settings.gcp_project_id}/secrets/{self.service_account_secret_name}/versions/latest"
+            secret_path = f"projects/{project_id}/secrets/{self.service_account_secret_name}/versions/latest"
 
             response = client.access_secret_version(request={"name": secret_path})
             service_account_info = json.loads(response.payload.data.decode('UTF-8'))
@@ -52,9 +58,15 @@ class GoogleChatConnector(PlatformConnector):
                 service_account_info,
                 scopes=['https://www.googleapis.com/auth/chat.bot']
             )
-            logger.debug(f"Initialized Google Chat credentials from secret: {self.service_account_secret_name}")
+            logger.debug(
+                f"Initialized Google Chat credentials from secret: {self.service_account_secret_name} "
+                f"in project: {project_id}"
+            )
         except Exception as e:
-            logger.error(f"Failed to initialize Google Chat credentials from secret {self.service_account_secret_name}: {e}")
+            logger.error(
+                f"Failed to initialize Google Chat credentials from secret {self.service_account_secret_name} "
+                f"in project {project_id}: {e}"
+            )
             raise
 
     def _get_chat_service(self):

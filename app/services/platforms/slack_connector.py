@@ -8,6 +8,7 @@ from fastapi import Request
 
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.errors import SlackApiError
+from google.cloud import secretmanager
 import aiohttp
 
 from app.services.platforms.base import PlatformConnector
@@ -24,17 +25,69 @@ class SlackConnector(PlatformConnector):
     file downloads, and webhook verification.
     """
 
-    def __init__(self, bot_token: str, signing_secret: Optional[str] = None):
+    def __init__(
+        self,
+        bot_token: Optional[str] = None,
+        signing_secret: Optional[str] = None,
+        bot_token_secret: Optional[str] = None,
+        bot_token_project_id: Optional[str] = None
+    ):
         """
         Initialize Slack connector.
 
         Args:
-            bot_token: Slack Bot User OAuth Token (xoxb-...)
+            bot_token: [DEPRECATED] Direct Slack Bot User OAuth Token (xoxb-...)
             signing_secret: Slack signing secret for webhook verification
+            bot_token_secret: Secret Manager secret name for Slack bot token
+            bot_token_project_id: GCP project ID where the secret is stored
+
+        Note:
+            Either bot_token OR (bot_token_secret + bot_token_project_id) must be provided.
+            The Secret Manager approach is preferred for better security.
         """
-        self.bot_token = bot_token
         self.signing_secret = signing_secret
-        self.client = AsyncWebClient(token=bot_token)
+
+        # Fetch token from Secret Manager if configured
+        if bot_token_secret and bot_token_project_id:
+            self.bot_token = self._fetch_token_from_secret_manager(
+                bot_token_secret, bot_token_project_id
+            )
+        elif bot_token:
+            # Backward compatibility: use direct token
+            self.bot_token = bot_token
+        else:
+            raise ValueError(
+                "Either bot_token OR (bot_token_secret + bot_token_project_id) must be provided"
+            )
+
+        self.client = AsyncWebClient(token=self.bot_token)
+
+    def _fetch_token_from_secret_manager(self, secret_name: str, project_id: str) -> str:
+        """
+        Fetch Slack bot token from Secret Manager.
+
+        Args:
+            secret_name: Secret Manager secret name
+            project_id: GCP project ID where secret is stored
+
+        Returns:
+            Slack bot token
+
+        Raises:
+            Exception: If secret cannot be accessed
+        """
+        try:
+            client = secretmanager.SecretManagerServiceClient()
+            secret_path = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+
+            response = client.access_secret_version(request={"name": secret_path})
+            token = response.payload.data.decode('UTF-8').strip()
+
+            logger.debug(f"Fetched Slack bot token from secret: {secret_name} in project: {project_id}")
+            return token
+        except Exception as e:
+            logger.error(f"Failed to fetch Slack bot token from secret {secret_name} in project {project_id}: {e}")
+            raise
 
     async def send_message(self, recipient_id: str, text: str) -> dict:
         """

@@ -89,7 +89,8 @@ async def handle_google_chat_event(
             return JSONResponse(content={})
 
         connector = GoogleChatConnector(
-            service_account_secret_name=google_chat_config.google_chat_service_account_secret
+            service_account_secret_name=google_chat_config.google_chat_service_account_secret,
+            project_id=google_chat_config.google_chat_project_id  # None for backward compatibility
         )
 
         # Parse Google Chat event into platform event

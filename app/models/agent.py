@@ -14,12 +14,27 @@ class AgentPlatformConfig(BaseModel):
 
     # Slack-specific fields
     slack_bot_id: Optional[str] = Field(default=None, description="Slack bot user ID (U...)")
-    slack_bot_token: Optional[str] = Field(default=None, description="Slack Bot OAuth Token")
+    slack_bot_token: Optional[str] = Field(
+        default=None,
+        description="[DEPRECATED] Direct Slack Bot OAuth Token - use slack_bot_token_secret instead"
+    )
+    slack_bot_token_secret: Optional[str] = Field(
+        default=None,
+        description="Secret Manager secret name for Slack bot token (e.g., 'my-agent-slack-token')"
+    )
+    slack_bot_token_project_id: Optional[str] = Field(
+        default=None,
+        description="GCP project ID where the Slack bot token secret is stored"
+    )
 
     # Google Chat-specific fields
     google_chat_service_account_secret: Optional[str] = Field(
         default=None,
         description="Secret Manager secret name for service account (e.g., 'growth-coach-credentials')"
+    )
+    google_chat_project_id: Optional[str] = Field(
+        default=None,
+        description="GCP project ID where the Google Chat service account secret is stored"
     )
     google_chat_bot_name: Optional[str] = Field(
         default=None,

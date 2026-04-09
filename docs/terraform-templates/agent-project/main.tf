@@ -219,6 +219,8 @@ SECTION 2: SLACK SETUP (If using Slack)
       --role="roles/secretmanager.secretAccessor" \
       --project=${var.project_id}
 
+    CRITICAL: Without this IAM binding, Slack messages will fail with "403 Permission Denied" errors!
+
 2c. Register your agent with middleware using the Slack platform configuration
 
 SECTION 3: GOOGLE CHAT SETUP (If using Google Chat)
@@ -228,24 +230,25 @@ SECTION 3: GOOGLE CHAT SETUP (If using Google Chat)
       --iam-account=SERVICE_ACCOUNT_EMAIL_FROM_OUTPUT \
       --project=${var.project_id}
 
-3b. Store the key in the middleware project's Secret Manager:
-    export MIDDLEWARE_PROJECT_ID="YOUR_MIDDLEWARE_PROJECT"
-
+3b. Store the key in YOUR AGENT'S project Secret Manager (NOT middleware):
     gcloud secrets versions add ${var.secret_name} \
       --data-file=${var.bot_account_id}-sa-key.json \
-      --project=$MIDDLEWARE_PROJECT_ID
+      --project=${var.project_id}
 
     # Securely delete the key file
     rm -f ${var.bot_account_id}-sa-key.json
 
 3c. Grant middleware access to the Google Chat credentials:
+    export MIDDLEWARE_PROJECT_ID="YOUR_MIDDLEWARE_PROJECT"
     export MIDDLEWARE_PROJECT_NUMBER=$(gcloud projects describe $MIDDLEWARE_PROJECT_ID --format="value(projectNumber)")
     export MIDDLEWARE_SA="$${MIDDLEWARE_PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
     gcloud secrets add-iam-policy-binding ${var.secret_name} \
       --member="serviceAccount:$${MIDDLEWARE_SA}" \
       --role="roles/secretmanager.secretAccessor" \
-      --project=$MIDDLEWARE_PROJECT_ID
+      --project=${var.project_id}
+
+    CRITICAL: Without this IAM binding, Google Chat messages will fail with "403 Permission Denied" errors!
 
 3d. Configure Google Chat bot in Console:
     - Go to: https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat?project=${var.project_id}

@@ -102,8 +102,22 @@ async def slack_events_v2(
 
             # Step 3: Get Slack platform config from agent
             slack_config = agent.get_slack_config()
-            if not slack_config or not slack_config.slack_bot_token:
+            if not slack_config:
                 logger.error(f"Agent {agent.id} has no Slack configuration")
+                return JSONResponse(content={"ok": True})
+
+            # Validate that we have either direct token or Secret Manager config
+            has_direct_token = slack_config.slack_bot_token is not None
+            has_secret_config = (
+                slack_config.slack_bot_token_secret is not None and
+                slack_config.slack_bot_token_project_id is not None
+            )
+
+            if not has_direct_token and not has_secret_config:
+                logger.error(
+                    f"Agent {agent.id} Slack config missing bot token. "
+                    f"Need either slack_bot_token OR (slack_bot_token_secret + slack_bot_token_project_id)"
+                )
                 return JSONResponse(content={"ok": True})
 
             # Step 4: Verify request signature against all configured signing secrets
@@ -111,7 +125,9 @@ async def slack_events_v2(
             signature_valid = False
             for signing_secret in settings.slack_signing_secrets:
                 connector_check = SlackConnector(
-                    bot_token=slack_config.slack_bot_token,
+                    bot_token=slack_config.slack_bot_token if has_direct_token else None,
+                    bot_token_secret=slack_config.slack_bot_token_secret if has_secret_config else None,
+                    bot_token_project_id=slack_config.slack_bot_token_project_id if has_secret_config else None,
                     signing_secret=signing_secret
                 )
                 if await connector_check.verify_request(request):
@@ -124,7 +140,9 @@ async def slack_events_v2(
 
             # Step 5: Create Slack connector with agent's credentials (no signing secret needed for sending)
             connector = SlackConnector(
-                bot_token=slack_config.slack_bot_token,
+                bot_token=slack_config.slack_bot_token if has_direct_token else None,
+                bot_token_secret=slack_config.slack_bot_token_secret if has_secret_config else None,
+                bot_token_project_id=slack_config.slack_bot_token_project_id if has_secret_config else None,
                 signing_secret=None  # Not needed for sending messages
             )
 
