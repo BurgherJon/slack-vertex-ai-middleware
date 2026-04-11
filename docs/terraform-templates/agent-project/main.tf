@@ -75,7 +75,14 @@ resource "google_project_service" "sheets" {
   disable_on_destroy = false
 }
 
-# Service Account for Google APIs (Drive, Sheets, etc.)
+# Enable Google Docs API (for agents that use Google Docs for memory/notes)
+resource "google_project_service" "docs" {
+  project = google_project.agent_project.project_id
+  service = "docs.googleapis.com"
+  disable_on_destroy = false
+}
+
+# Service Account for Google APIs (Drive, Sheets, Docs, etc.)
 # This SA will be used by your agent to access Google Drive and Sheets
 resource "google_service_account" "agent_apis" {
   project      = google_project.agent_project.project_id
