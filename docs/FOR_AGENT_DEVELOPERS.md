@@ -804,15 +804,15 @@ The middleware can download images from Slack messages and forward them to your 
 
 ### What the Middleware Sends
 
-When a user sends an image via Slack, the middleware adds an `images` field to your agent's input.
+When a user sends a message (with or without images), the middleware forwards it to your agent with the following structure:
 
 **With GCS configured** (recommended for Agent Engine):
 
 ```python
 {
-    "message": "[From: John Smith | SlackID: U0AFZ86NE00] What wine pairs with this?",
-    "user_id": "slack-user-abc123",
-    "session_id": "5695302693795397632",
+    "message": "[From: Jonathan Cavell] What wine pairs with this?",
+    "user_id": "Jonathan Cavell",  # User's actual name from Firestore
+    "session_id": "Jonathan Cavell:5695302693795397632",
     "images": [
         {
             "gcs_uri": "gs://your-bucket/slack-files/20260328/a1b2c3d4e5f6.png",
@@ -826,9 +826,9 @@ When a user sends an image via Slack, the middleware adds an `images` field to y
 
 ```python
 {
-    "message": "[From: John Smith | SlackID: U0AFZ86NE00] What wine pairs with this?",
-    "user_id": "slack-user-abc123",
-    "session_id": "5695302693795397632",
+    "message": "[From: Jonathan Cavell] What wine pairs with this?",
+    "user_id": "Jonathan Cavell",  # User's actual name from Firestore
+    "session_id": "Jonathan Cavell:5695302693795397632",
     "images": [
         {
             "data": "iVBORw0KGgoAAAANSUhEUgAA...",  # base64-encoded image
@@ -837,6 +837,22 @@ When a user sends an image via Slack, the middleware adds an `images` field to y
     ]
 }
 ```
+
+### User Identity Format
+
+**Important**: The middleware sends the user's **actual name** (not platform IDs) to your agent:
+
+- **`user_id`**: The user's primary name from Firestore (e.g., "Jonathan Cavell", "Sarah Johnson")
+- **`session_id`**: Combines the user name and Vertex AI session ID (e.g., "Jonathan Cavell:5695302693795397632")
+- **`message` prefix**: Includes the user's name for context (e.g., "[From: Jonathan Cavell]")
+
+This means your agent recognizes users by their actual name across **both Slack and Google Chat**, enabling personalized interactions and consistent conversation history regardless of which platform they use.
+
+**Multi-Platform User Identity:**
+- Users can message your agent from both Slack and Google Chat
+- The middleware maintains a unified user record in Firestore that links both platform identities
+- Your agent always receives the same `user_id` (the person's name) regardless of which platform they're using
+- This enables seamless cross-platform conversations and consistent personalization
 
 ### Prerequisites
 
@@ -1253,10 +1269,10 @@ Format: `minute hour day-of-month month day-of-week`
 When a scheduled job executes, the prompt is sent to your agent with the user's identity:
 
 ```
-[From: John Smith | SlackID: U0AFZ86NE00] What should I focus on today?
+[From: Jonathan Cavell] What should I focus on today?
 ```
 
-Your agent can use this to personalize responses or access user-specific data.
+The user's actual name (from Firestore) is included in both the message prefix and the `user_id` field, allowing your agent to personalize responses and access user-specific data consistently across all platforms.
 
 ---
 
