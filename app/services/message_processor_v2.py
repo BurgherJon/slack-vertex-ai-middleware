@@ -73,6 +73,9 @@ class MessageProcessorV2:
         user = None
         try:
             # Step 1: Resolve platform identity to unified user
+            # Note: For Google Chat, get_user_info() will fail since the Chat API
+            # doesn't have a users.get() method. We use display_name from event
+            # for initial user creation, but always use user.primary_name after that.
             user_info = await connector.get_user_info(event.user_id)
             display_name = user_info.get("display_name", event.user_id)
             email = user_info.get("email") or event.user_email
@@ -85,7 +88,7 @@ class MessageProcessorV2:
             )
 
             logger.info(
-                f"Processing message from user {user.id} ({display_name}) "
+                f"Processing message from user {user.id} ({user.primary_name}) "
                 f"on {event.platform}"
             )
 
@@ -155,7 +158,7 @@ class MessageProcessorV2:
                 return
 
             # Build message text with user identity prefix
-            message_text = f"[From: {display_name} | {event.platform}_id: {event.user_id}] {event.message_text}"
+            message_text = f"[From: {user.primary_name} | {event.platform}_id: {event.user_id}] {event.message_text}"
 
             # Embed image references in the message text
             if images:
