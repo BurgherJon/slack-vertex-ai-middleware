@@ -104,6 +104,38 @@ resource "google_project_organization_policy" "allow_sa_key_creation" {
   ]
 }
 
+# Enable Cloud Storage API (for staging bucket)
+resource "google_project_service" "storage" {
+  project = google_project.agent_project.project_id
+  service = "storage.googleapis.com"
+  disable_on_destroy = false
+}
+
+# Staging bucket for ADK deployments
+# ADK uses this bucket to upload agent code before deploying to Vertex AI
+resource "google_storage_bucket" "staging" {
+  project       = google_project.agent_project.project_id
+  name          = "${var.project_id}-staging"
+  location      = var.region
+  force_destroy = false  # Protect against accidental deletion
+
+  uniform_bucket_level_access = true
+
+  # Auto-delete old staging files after 7 days
+  lifecycle_rule {
+    condition {
+      age = 7
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  depends_on = [
+    google_project_service.storage
+  ]
+}
+
 # ==============================================================================
 # SECTION 2: SLACK-SPECIFIC INFRASTRUCTURE
 # Uncomment this section if your agent uses Slack
@@ -187,6 +219,11 @@ output "apis_service_account_email" {
   value       = google_service_account.agent_apis.email
 }
 
+output "staging_bucket" {
+  description = "GCS bucket for ADK deployment staging"
+  value       = google_storage_bucket.staging.name
+}
+
 # Uncomment if using Google Chat
 # output "chat_service_account_email" {
 #   description = "Service account email for Google Chat bot"
@@ -201,7 +238,24 @@ output "next_steps" {
 
 SECTION 1: COMMON SETUP (All agents)
 
-1. Review what you uncommented in main.tf and proceed with relevant sections below
+1a. The staging bucket has been created: gs://${google_storage_bucket.staging.name}
+    This bucket is used by ADK to upload agent code before deploying to Vertex AI.
+
+1b. Deploy your agent to Vertex AI using ADK:
+    cd /path/to/your-agent
+
+    adk deploy agent_engine \
+      --project ${var.project_id} \
+      --region ${var.region} \
+      --staging_bucket gs://${google_storage_bucket.staging.name} \
+      --display_name "${var.bot_name}" \
+      --trace_to_cloud \
+      your-agent-directory
+
+    Note the Reasoning Engine ID from the output:
+    projects/${var.project_id}/locations/${var.region}/reasoningEngines/ENGINE_ID
+
+1c. Review what you uncommented in main.tf and proceed with relevant sections below
 
 SECTION 2: SLACK SETUP (If using Slack)
 

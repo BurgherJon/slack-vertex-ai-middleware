@@ -150,12 +150,65 @@ gcloud secrets add-iam-policy-binding your-agent-slack-token \
 
 **What this does**: Allows the middleware's Cloud Run service account to read your bot credentials so it can authenticate API calls to Google Chat and/or Slack.
 
-#### 4e. Configure Platform Settings
+#### 4e. Create Staging Bucket for ADK Deployments
+
+ADK requires a Cloud Storage bucket to stage deployment artifacts when deploying your agent to Vertex AI.
+
+```bash
+export PROJECT_ID=$(terraform output -raw project_id)
+
+# Create staging bucket (one-time setup)
+gsutil mb -p ${PROJECT_ID} -l us-central1 gs://${PROJECT_ID}-staging
+
+# Optional: Set lifecycle policy to auto-delete old staging files after 7 days
+cat > /tmp/lifecycle.json <<EOF
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {"type": "Delete"},
+        "condition": {"age": 7}
+      }
+    ]
+  }
+}
+EOF
+
+gsutil lifecycle set /tmp/lifecycle.json gs://${PROJECT_ID}-staging
+rm /tmp/lifecycle.json
+```
+
+**Note**: If the bucket doesn't exist, ADK will create it automatically on first deployment, but creating it manually allows you to set lifecycle policies and choose the location.
+
+#### 4f. Deploy Your Agent to Vertex AI
+
+Now deploy your agent code to Vertex AI Agent Engine:
+
+```bash
+# Navigate to your agent repository
+cd /path/to/your-agent
+
+# Deploy using ADK
+# The staging bucket is used to upload your agent code before deployment
+adk deploy agent_engine \
+  --project "$PROJECT_ID" \
+  --region us-central1 \
+  --staging_bucket "gs://${PROJECT_ID}-staging" \
+  --display_name "Your Agent Name" \
+  --trace_to_cloud \
+  your-agent-directory
+
+# Note the Reasoning Engine ID from the output
+# Format: projects/YOUR_PROJECT/locations/us-central1/reasoningEngines/ENGINE_ID
+export AGENT_VERTEX_ID="projects/YOUR_PROJECT/locations/us-central1/reasoningEngines/YOUR_ENGINE_ID"
+```
+
+#### 4g. Configure Platform Settings
 
 - For Google Chat: Configure the bot in Google Cloud Console
 - For Slack: Configure the bot in Slack UI
 
-#### 4f. Enable Platform in Firestore
+#### 4h. Enable Platform in Firestore
 
 Use the middleware scripts to register your agent and enable platforms:
 
@@ -182,7 +235,9 @@ python scripts/enable_slack_agent.py \
   --slack-project-id "$PROJECT_ID"
 ```
 
-#### 4g. Test the Agent
+**Note**: Use the `AGENT_VERTEX_ID` from step 4f when registering your agent.
+
+#### 4i. Test the Agent
 
 Send a test message through your configured platform(s).
 

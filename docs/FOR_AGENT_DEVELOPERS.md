@@ -80,7 +80,37 @@ export NEW_AGENT_SLACK_BOT_ID="U0AFZ86NE00"  # Use the U... ID, not B...
 
 ```bash
 # In your agent repository (e.g., my-new-agent/)
-# Deploy your agent using your deployment method
+
+# IMPORTANT: ADK requires a staging bucket for deployment artifacts
+# Create it once (or let ADK create it automatically):
+export PROJECT_ID="your-project-id"
+gsutil mb -p ${PROJECT_ID} -l us-central1 gs://${PROJECT_ID}-staging
+
+# Optional: Set lifecycle policy to auto-delete old staging files after 7 days
+cat > /tmp/lifecycle.json <<EOF
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {"type": "Delete"},
+        "condition": {"age": 7}
+      }
+    ]
+  }
+}
+EOF
+gsutil lifecycle set /tmp/lifecycle.json gs://${PROJECT_ID}-staging
+rm /tmp/lifecycle.json
+
+# Deploy your agent using ADK
+# The staging bucket is used to upload your agent code before deployment
+adk deploy agent_engine \
+  --project "$PROJECT_ID" \
+  --region us-central1 \
+  --staging_bucket "gs://${PROJECT_ID}-staging" \
+  --display_name "My New Agent" \
+  --trace_to_cloud \
+  my-agent-directory
 
 # For Vertex AI Reasoning Engines (ADK agents), the ID format is:
 # projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID
