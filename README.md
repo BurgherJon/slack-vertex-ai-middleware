@@ -1,12 +1,12 @@
 # Multi-Platform Vertex AI Agent Middleware
 
-FastAPI middleware service that routes messages from **Slack** and **Google Chat** to Google Vertex AI Agent Engine and posts responses back. Supports multiple agents with individual platform identities, automatic session management, cross-platform conversation continuity, and scheduled jobs.
+FastAPI middleware service that routes messages from **Slack**, **Google Chat**, and **Telegram** to Google Vertex AI Agent Engine and posts responses back. Supports multiple agents with individual platform identities, automatic session management, cross-platform conversation continuity, and scheduled jobs.
 
 ## Features
 
-- **Multi-Platform Support**: Slack and Google Chat with unified architecture
+- **Multi-Platform Support**: Slack, Google Chat, and Telegram with unified architecture
 - **Multi-Agent Support**: Each agent has its own identity on each platform
-- **Cross-Platform Sessions**: Continue conversations across Slack and Google Chat
+- **Cross-Platform Sessions**: Continue conversations across Slack, Google Chat, and Telegram
 - **Session Management**: Automatic session tracking per user+agent combination
 - **Scheduled Jobs**: Proactive agent-initiated messages with rate limiting
 - **Async Processing**: Responds within 3 seconds, processes in background
@@ -22,7 +22,7 @@ FastAPI middleware service that routes messages from **Slack** and **Google Chat
 ```
 User Message
   ↓
-Platform (Slack or Google Chat)
+Platform (Slack, Google Chat, or Telegram)
   ↓
 POST /api/v1/{platform}/events
   ↓
@@ -42,6 +42,7 @@ BackgroundTask:
 The middleware uses a unified `PlatformConnector` interface:
 - **SlackConnector**: Slack Events API integration
 - **GoogleChatConnector**: Google Chat API with service account auth
+- **TelegramConnector**: Telegram Bot API with webhook verification
 
 All platform-specific logic is isolated in connectors, making it easy to add new platforms.
 
@@ -54,6 +55,7 @@ All platform-specific logic is isolated in connectors, making it easy to add new
 - **Messaging**:
   - Slack Events API (HTTP push)
   - Google Chat API (HTTP push + service account auth)
+  - Telegram Bot API (HTTP push + webhook verification)
 - **Infrastructure**: Terraform (reproducible infrastructure-as-code)
 - **Secrets**: Google Cloud Secret Manager
 - **Storage**: Google Cloud Storage (temporary file uploads)
@@ -492,6 +494,117 @@ pip install aiohttp
 - **Use Secret Manager** for production secrets
 - **Rotate tokens** if exposed
 - **Review permissions** regularly
+
+## Adding a New Platform
+
+The middleware's platform abstraction makes it straightforward to add new messaging platforms (WhatsApp, Discord, Microsoft Teams, etc.). Telegram serves as the reference implementation for this process.
+
+### Architecture Overview
+
+```
+Platform Webhook
+  ↓
+parse_event() → PlatformEvent (unified schema)
+  ↓
+MessageProcessor (platform-agnostic)
+  ↓
+Vertex AI Agent
+  ↓
+connector.send_message() → Platform
+```
+
+**Key Design Principles:**
+- **Platform-agnostic core**: All business logic lives in `MessageProcessorV2`
+- **Unified identity**: Users maintain the same identity across all platforms
+- **Session continuity**: Conversations persist across platforms
+- **Modular secrets**: Each agent's platform credentials stored separately
+
+### Implementation Checklist
+
+Using Telegram as the reference implementation:
+
+**1. Create Platform Connector** ([app/services/platforms/telegram_connector.py](app/services/platforms/telegram_connector.py))
+- [ ] Implement `PlatformConnector` interface from [base.py](app/services/platforms/base.py)
+- [ ] Implement 6 required methods:
+  - `verify_request()` - Authenticate webhook requests
+  - `parse_event()` - Transform platform events → `PlatformEvent` ([platform_event.py](app/schemas/platform_event.py))
+  - `send_message()` - Send responses back to users
+  - `download_file()` - Download file attachments
+  - `get_user_info()` - Fetch user profile data
+  - `open_conversation()` - Get/create DM conversation ID
+- [ ] Support both direct tokens and Secret Manager credentials
+
+**2. Create Route Handler** ([app/api/v1/telegram_events.py](app/api/v1/telegram_events.py))
+- [ ] Create FastAPI router with `POST /{platform}/events` endpoint
+- [ ] Handle platform-specific event types (messages, edits, etc.)
+- [ ] Filter bot messages to prevent loops
+- [ ] Identify agent from platform config
+- [ ] Verify request authenticity
+- [ ] Process event in background task
+
+**3. Register Router** ([app/api/v1/routes.py](app/api/v1/routes.py))
+- [ ] Import platform router
+- [ ] Include router in main API router
+
+**4. Extend Agent Model** ([app/models/agent.py](app/models/agent.py))
+- [ ] Add platform-specific fields to `AgentPlatformConfig`
+- [ ] Add convenience method `get_{platform}_config()`
+- [ ] Update platform field description to include new platform
+
+**5. Add Terraform Secret Template** ([docs/terraform-templates/agent-project/main.tf](docs/terraform-templates/agent-project/main.tf))
+- [ ] Add commented section for platform-specific secrets
+- [ ] Include instructions for token storage
+- [ ] Add IAM binding instructions for middleware access
+
+**6. Update Documentation**
+- [ ] Update README.md features and architecture
+- [ ] Add platform setup guide to [FOR_AGENT_DEVELOPERS.md](docs/FOR_AGENT_DEVELOPERS.md)
+- [ ] Add troubleshooting section
+- [ ] Document credential creation and configuration
+
+**7. Create Identity Linking Support**
+- [ ] Test with [scripts/link_identities.py](scripts/link_identities.py) (already supports any platform!)
+- [ ] Verify cross-platform session continuity
+
+**8. End-to-End Testing**
+- [ ] Create test bot on the platform
+- [ ] Deploy middleware changes
+- [ ] Configure webhook
+- [ ] Send test message
+- [ ] Verify identity resolution, session creation, and Vertex AI routing
+
+### Reference Files
+
+**Core Abstractions:**
+- [app/services/platforms/base.py](app/services/platforms/base.py) - `PlatformConnector` interface definition
+- [app/schemas/platform_event.py](app/schemas/platform_event.py) - Unified event schema
+- [app/services/message_processor_v2.py](app/services/message_processor_v2.py) - Platform-agnostic processor
+
+**Reference Implementation (Telegram):**
+- [app/services/platforms/telegram_connector.py](app/services/platforms/telegram_connector.py) - Complete connector
+- [app/api/v1/telegram_events.py](app/api/v1/telegram_events.py) - Route handler
+- [app/models/agent.py](app/models/agent.py) - See `telegram_*` fields in `AgentPlatformConfig`
+
+**Other Platforms for Comparison:**
+- [app/services/platforms/slack_connector.py](app/services/platforms/slack_connector.py) - HMAC signature verification
+- [app/services/platforms/google_chat_connector.py](app/services/platforms/google_chat_connector.py) - Service account auth
+
+### Benefits of This Architecture
+
+1. **Minimal Code**: ~300 lines to add a complete platform integration
+2. **Automatic Features**: New platforms get identity management, sessions, and scheduled jobs for free
+3. **Cross-Platform Users**: Users auto-link via email, maintaining conversations across all platforms
+4. **Consistent Experience**: Same agent behavior regardless of platform
+5. **Isolated Concerns**: Platform bugs don't affect other platforms or core logic
+
+### Future Platform Ideas
+
+- **WhatsApp Business API** - Enterprise messaging
+- **Discord** - Community and gaming
+- **Microsoft Teams** - Enterprise collaboration
+- **Line** - Popular in Asia
+- **Facebook Messenger** - Social integration
+- **SMS via Twilio** - Universal accessibility
 
 ## Documentation
 

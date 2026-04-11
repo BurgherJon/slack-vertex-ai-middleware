@@ -213,6 +213,29 @@ resource "google_storage_bucket" "staging" {
 # }
 
 # ==============================================================================
+# SECTION 4: TELEGRAM-SPECIFIC INFRASTRUCTURE
+# Uncomment this section if your agent uses Telegram
+# ==============================================================================
+
+# # Telegram Bot Token Secret
+# resource "google_secret_manager_secret" "telegram_bot_token" {
+#   project   = google_project.agent_project.project_id
+#   secret_id = "${var.bot_account_id}-telegram-token"
+#
+#   replication {
+#     auto {}
+#   }
+#
+#   depends_on = [
+#     google_project_service.secretmanager
+#   ]
+# }
+
+# Note: The Telegram bot token must be added manually after terraform apply:
+# echo -n "YOUR_TELEGRAM_BOT_TOKEN" | gcloud secrets versions add ${var.bot_account_id}-telegram-token \
+#   --data-file=- --project=${var.project_id}
+
+# ==============================================================================
 # OUTPUTS
 # ==============================================================================
 
@@ -329,7 +352,48 @@ SECTION 3: GOOGLE CHAT SETUP (If using Google Chat)
       --secret-name ${var.secret_name} \
       --google-chat-project-id ${var.project_id}
 
-SECTION 4: GOOGLE APIS SETUP (Share Google Drive/Sheets)
+SECTION 4: TELEGRAM SETUP (If using Telegram)
+
+4a. Create Telegram bot via BotFather:
+    - Open Telegram and message @BotFather
+    - Send command: /newbot
+    - Follow prompts to choose name and username
+    - Copy the bot token (format: 1234567890:ABCdefGHIjklMNOpqrsTUVwxyz)
+
+4b. Store the Telegram bot token in Secret Manager:
+    echo -n "YOUR_TELEGRAM_BOT_TOKEN" | gcloud secrets versions add ${var.bot_account_id}-telegram-token \
+      --data-file=- --project=${var.project_id}
+
+4c. Grant middleware access to the Telegram token:
+    export MIDDLEWARE_PROJECT_ID="YOUR_MIDDLEWARE_PROJECT"
+    export MIDDLEWARE_PROJECT_NUMBER=$(gcloud projects describe $MIDDLEWARE_PROJECT_ID --format="value(projectNumber)")
+    export MIDDLEWARE_SA="$${MIDDLEWARE_PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+    gcloud secrets add-iam-policy-binding ${var.bot_account_id}-telegram-token \
+      --member="serviceAccount:$${MIDDLEWARE_SA}" \
+      --role="roles/secretmanager.secretAccessor" \
+      --project=${var.project_id}
+
+    CRITICAL: Without this IAM binding, Telegram messages will fail with "403 Permission Denied" errors!
+
+4d. Set Telegram webhook:
+    # Generate a random secret token for webhook verification
+    export WEBHOOK_SECRET=$(openssl rand -base64 32)
+
+    # Set the webhook
+    curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "url": "https://YOUR_MIDDLEWARE_URL/api/v1/telegram/events",
+        "secret_token": "'$WEBHOOK_SECRET'"
+      }'
+
+    # Save the webhook secret for agent configuration
+    echo "Webhook secret: $WEBHOOK_SECRET"
+
+4e. Enable Telegram for your agent in middleware using Firestore console or script
+
+SECTION 5: GOOGLE APIS SETUP (Share Google Drive/Sheets)
 
 4a. Share Google Sheets/Drive files with the Google APIs service account:
     Service Account Email: ${google_service_account.agent_apis.email}

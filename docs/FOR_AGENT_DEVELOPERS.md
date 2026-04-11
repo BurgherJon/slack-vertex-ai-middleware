@@ -8,12 +8,14 @@ This guide covers how to integrate your Vertex AI agent with the multi-platform 
 
 1. [Creating a Brand New Agent - Slack](#creating-a-brand-new-agent---slack)
 2. [Creating a Brand New Agent - Google Chat](#creating-a-brand-new-agent---google-chat)
-3. [Updating an Existing Agent](#updating-an-existing-agent)
-4. [Troubleshooting](#troubleshooting)
-5. [Quick Reference](#quick-reference)
-6. [Receiving Images from Slack](#receiving-images-from-slack)
-7. [Setting Up GCS for Image Storage](#setting-up-gcs-for-image-storage)
-8. [Building Scheduled Job Tools](#building-scheduled-job-tools)
+3. [Creating a Brand New Agent - Telegram](#creating-a-brand-new-agent---telegram)
+4. [Updating an Existing Agent](#updating-an-existing-agent)
+5. [Troubleshooting](#troubleshooting)
+6. [Quick Reference](#quick-reference)
+7. [Receiving Images from Slack](#receiving-images-from-slack)
+8. [Setting Up GCS for Image Storage](#setting-up-gcs-for-image-storage)
+9. [Building Scheduled Job Tools](#building-scheduled-job-tools)
+10. [Linking Platform Identities](#linking-platform-identities)
 
 ---
 
@@ -509,6 +511,282 @@ your-agent-repo/
 
 ---
 
+## Creating a Brand New Agent - Telegram
+
+Follow these steps when creating a completely new agent and want to make it available via Telegram.
+
+### Overview
+
+Telegram bots use the Telegram Bot API and communicate via webhooks. Unlike Slack and Google Chat, Telegram bots:
+- Don't require separate GCP projects
+- Use simple bot tokens from @BotFather
+- Support webhook secret tokens for security
+- Have straightforward file handling
+
+### Prerequisites
+
+Before starting, ensure you have:
+- Telegram account (personal account, no business account needed)
+- Your agent deployed to Vertex AI (Reasoning Engine)
+- Access to the middleware's GCP project
+
+### Step 1: Create Telegram Bot via BotFather
+
+```bash
+# 1. Open Telegram and search for @BotFather (official Telegram bot)
+# 2. Start a conversation with @BotFather
+# 3. Send command: /newbot
+# 4. Follow the prompts:
+#    - Choose a display name (e.g., "Growth Coach Bot")
+#    - Choose a username (must end in 'bot', e.g., "growth_coach_bot")
+# 5. BotFather will respond with your bot token
+
+# Example bot token format:
+# 1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
+
+export TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN_FROM_BOTFATHER"
+
+# IMPORTANT: Keep this token secret! It has full access to your bot.
+```
+
+### Step 2: Store Bot Token in Secret Manager
+
+For production, store the token in your agent's GCP project:
+
+```bash
+# If you have an existing agent project with terraform
+cd /path/to/your-agent-repo/terraform
+
+# Uncomment SECTION 4: TELEGRAM in main.tf
+# Then apply terraform to create the secret
+terraform apply
+
+# Add the bot token to Secret Manager
+export PROJECT_ID=$(terraform output -raw project_id)
+export BOT_ACCOUNT_ID="your-agent"  # From terraform.tfvars
+
+echo -n "$TELEGRAM_BOT_TOKEN" | gcloud secrets versions add ${BOT_ACCOUNT_ID}-telegram-token \
+  --data-file=- \
+  --project=$PROJECT_ID
+
+# Grant middleware access to the secret
+export MIDDLEWARE_PROJECT_ID="vertex-ai-middleware-prod"
+export MIDDLEWARE_PROJECT_NUMBER=$(gcloud projects describe $MIDDLEWARE_PROJECT_ID --format="value(projectNumber)")
+export MIDDLEWARE_SA="${MIDDLEWARE_PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+gcloud secrets add-iam-policy-binding ${BOT_ACCOUNT_ID}-telegram-token \
+  --member="serviceAccount:${MIDDLEWARE_SA}" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project=$PROJECT_ID
+```
+
+### Step 3: Configure Telegram Webhook
+
+Set up the webhook to point to your middleware:
+
+```bash
+# Generate a secure random secret for webhook verification
+export WEBHOOK_SECRET=$(openssl rand -base64 32)
+
+# Set the webhook
+curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"url\": \"https://YOUR_MIDDLEWARE_URL/api/v1/telegram/events\",
+    \"secret_token\": \"${WEBHOOK_SECRET}\"
+  }"
+
+# Response should be: {"ok":true,"result":true,...}
+
+# Verify webhook is set
+curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
+
+# Save the webhook secret for agent configuration
+echo "Webhook Secret: $WEBHOOK_SECRET"
+# Store this - you'll need it for the agent config
+```
+
+### Step 4: Register Agent with Middleware
+
+Add Telegram platform configuration to your agent in Firestore:
+
+```bash
+# Option A: Using Firestore Console (easiest for adding to existing agent)
+# 1. Go to: https://console.firebase.google.com/project/vertex-ai-middleware-prod/firestore
+# 2. Navigate to: agents collection → your agent document
+# 3. Add to the 'platforms' array:
+{
+  "platform": "telegram",
+  "enabled": true,
+  "telegram_bot_token_secret": "your-agent-telegram-token",
+  "telegram_bot_token_project_id": "your-agent-project-id",
+  "telegram_webhook_secret": "THE_WEBHOOK_SECRET_FROM_STEP_3"
+}
+
+# Option B: Using a script (create your own based on enable_google_chat_agent.py)
+# The middleware doesn't have a pre-built script for Telegram yet,
+# but you can manually add the platform config via Firestore console
+```
+
+**Agent Firestore Structure Example:**
+```json
+{
+  "display_name": "Growth Coach",
+  "vertex_ai_agent_id": "projects/YOUR_PROJECT/locations/us-central1/reasoningEngines/123",
+  "platforms": [
+    {
+      "platform": "slack",
+      "enabled": true,
+      "slack_bot_id": "U0123456",
+      "slack_bot_token_secret": "growth-coach-slack-token",
+      "slack_bot_token_project_id": "growth-coach-prod"
+    },
+    {
+      "platform": "telegram",
+      "enabled": true,
+      "telegram_bot_token_secret": "growth-coach-telegram-token",
+      "telegram_bot_token_project_id": "growth-coach-prod",
+      "telegram_webhook_secret": "your-webhook-secret-from-step-3"
+    }
+  ]
+}
+```
+
+### Step 5: Test Your Telegram Bot
+
+```bash
+# 1. Open Telegram on your phone or desktop
+# 2. Search for your bot username (e.g., @growth_coach_bot)
+# 3. Start a conversation by clicking "Start" or sending /start
+# 4. Send it a test message: "Hello!"
+# 5. You should get a response from your Vertex AI agent
+
+# Check logs if no response:
+gcloud run logs read slack-vertex-middleware \
+  --project vertex-ai-middleware-prod \
+  --region us-central1 \
+  --limit 50 \
+  | grep -i telegram
+```
+
+### Step 6: Link Your Telegram Identity (Optional)
+
+If you already have a user in the system from Slack or Google Chat, link your Telegram identity:
+
+```bash
+cd /path/to/slack-vertex-ai-middleware
+
+# First, send a message to the bot so it creates your Telegram user
+# Then check what user ID was created
+python scripts/check_user_identities.py
+
+# Link your Telegram identity to your existing user
+python scripts/link_identities.py \
+  --user-id YOUR_EXISTING_USER_ID \
+  --platform telegram \
+  --platform-user-id YOUR_TELEGRAM_USER_ID \
+  --display-name "Your Name"
+
+# Now you can message the bot from Telegram and it will recognize you
+# as the same person across all platforms!
+```
+
+### What Happens Behind the Scenes
+
+When a user messages your Telegram bot:
+
+1. Telegram sends the update to the middleware's `/api/v1/telegram/events` endpoint
+2. Middleware verifies the webhook secret token
+3. Middleware looks up your agent in Firestore (finds first enabled Telegram agent)
+4. Middleware retrieves the bot token from Secret Manager
+5. Middleware creates/retrieves a session for the user
+6. Middleware sends the message to your Vertex AI agent
+7. Middleware posts the response back to Telegram using the bot token
+
+### Platform Configuration in Firestore
+
+After configuration, your agent document in Firestore has a `platforms` array:
+
+```json
+{
+  "name": "My Agent",
+  "vertex_ai_agent_id": "projects/.../reasoningEngines/...",
+  "platforms": [
+    {
+      "platform": "telegram",
+      "enabled": true,
+      "telegram_bot_token_secret": "my-agent-telegram-token",
+      "telegram_bot_token_project_id": "my-agent-prod",
+      "telegram_webhook_secret": "abc123..."
+    }
+  ]
+}
+```
+
+You can have multiple platforms enabled (e.g., Slack + Google Chat + Telegram).
+
+### Troubleshooting Telegram Setup
+
+**Bot doesn't respond to messages:**
+- Verify webhook is set correctly: `curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo`
+- Check webhook URL points to correct middleware: `https://YOUR_MIDDLEWARE/api/v1/telegram/events`
+- Verify secret token matches in webhook config and Firestore
+- Check middleware logs for errors
+
+**"403 Permission Denied" errors:**
+- Ensure middleware SA has `secretAccessor` role on the bot token secret
+- Verify secret exists: `gcloud secrets describe my-agent-telegram-token --project=my-project`
+
+**Webhook verification failed:**
+- Check that `telegram_webhook_secret` in Firestore matches the secret token you used in `setWebhook`
+- The secret is sent in the `X-Telegram-Bot-Api-Secret-Token` header
+
+**Bot token invalid:**
+- Get a new token from @BotFather: `/token` command
+- Update the secret in Secret Manager
+- Restart the middleware to pick up the new token
+
+**Messages not reaching agent:**
+- Check middleware logs: `gcloud run logs read slack-vertex-middleware --limit=50 | grep telegram`
+- Verify agent is enabled: Check `platforms[].enabled` in Firestore
+- Ensure Vertex AI agent ID is correct
+
+### Telegram Bot Features
+
+**Supported:**
+- ✅ Text messages
+- ✅ Photos (downloaded and sent to agent)
+- ✅ Documents (downloaded and sent to agent)
+- ✅ Videos (downloaded and sent to agent)
+- ✅ Voice messages (downloaded and sent to agent)
+- ✅ Cross-platform identity (same user across Slack/Google Chat/Telegram)
+- ✅ Markdown formatting in bot responses
+
+**Not Yet Supported:**
+- ❌ Inline keyboards/buttons (Telegram-specific UI)
+- ❌ Bot commands (/start, /help, etc.) - treated as regular messages
+- ❌ Group chats (only DMs currently)
+- ❌ Telegram-specific features (stickers, polls, etc.)
+
+### Documentation
+
+Keep this terraform configuration in your agent repository:
+
+```bash
+# Your agent repo structure should look like:
+your-agent-repo/
+├── terraform/
+│   ├── main.tf                     # With SECTION 4: TELEGRAM uncommented
+│   ├── variables.tf
+│   ├── terraform.tfvars            # Your configuration (gitignored)
+│   ├── terraform.tfvars.example
+│   └── README.md
+├── agent.py                        # Your agent code
+└── MIDDLEWARE_INTEGRATION.md       # Copy of this guide
+```
+
+---
+
 ## Updating an Existing Agent
 
 When you deploy a new version of an existing agent to Vertex AI, you need to update the middleware.
@@ -761,6 +1039,45 @@ python scripts/enable_google_chat_agent.py \
   --google-chat-project-id "BOT_PROJECT_ID"
 
 # 7. Test in Google Chat
+```
+
+### Create New Agent - Telegram
+
+```bash
+# 1. Create Telegram bot via @BotFather
+# Open Telegram → message @BotFather → /newbot
+# Save the bot token
+
+# 2. Uncomment SECTION 4: TELEGRAM in your agent's terraform/main.tf
+terraform apply
+
+# 3. Store bot token in Secret Manager
+echo -n "YOUR_BOT_TOKEN" | gcloud secrets versions add your-agent-telegram-token \
+  --data-file=- --project=your-agent-project
+
+# 4. Grant middleware access
+gcloud secrets add-iam-policy-binding your-agent-telegram-token \
+  --member="serviceAccount:MIDDLEWARE_SA" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project=your-agent-project
+
+# 5. Set Telegram webhook
+export WEBHOOK_SECRET=$(openssl rand -base64 32)
+curl -X POST "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://YOUR_MIDDLEWARE_URL/api/v1/telegram/events","secret_token":"'$WEBHOOK_SECRET'"}'
+
+# 6. Add Telegram platform to agent in Firestore
+# Use Firestore console to add to platforms array:
+# {
+#   "platform": "telegram",
+#   "enabled": true,
+#   "telegram_bot_token_secret": "your-agent-telegram-token",
+#   "telegram_bot_token_project_id": "your-agent-project",
+#   "telegram_webhook_secret": "THE_WEBHOOK_SECRET_FROM_STEP_5"
+# }
+
+# 7. Test by messaging your bot on Telegram
 ```
 
 ### Update Existing Agent
@@ -1273,6 +1590,128 @@ When a scheduled job executes, the prompt is sent to your agent with the user's 
 ```
 
 The user's actual name (from Firestore) is included in both the message prefix and the `user_id` field, allowing your agent to personalize responses and access user-specific data consistently across all platforms.
+
+---
+
+## Linking Platform Identities
+
+The middleware supports **cross-platform user identity**, allowing the same person to message your agent from Slack, Google Chat, and Telegram while maintaining a unified conversation history and personalization.
+
+### How Identity Resolution Works
+
+When a message arrives:
+
+1. **Auto-creation**: If the platform user is new, middleware creates a user with that platform identity
+2. **Email linking**: If a user with the same email exists, identities are automatically linked
+3. **Manual linking**: Use `link_identities.py` to merge identities for the same person
+
+### Use Cases for Manual Linking
+
+**Scenario 1: User messages from new platform**
+- Jonathan uses Growth Coach on Slack (user ID: `abc123`)
+- Jonathan messages Growth Coach on Telegram for the first time
+- New Telegram-only user is created (user ID: `xyz789`)
+- Use `link_identities.py` to merge Telegram identity into existing user `abc123`
+
+**Scenario 2: Email auto-linking didn't work**
+- Slack provides email, Google Chat provides email → auto-linked ✅
+- Telegram doesn't provide email → manual link required
+
+**Scenario 3: Same person, different email addresses**
+- Work Slack uses `jonathan@company.com`
+- Personal Google Chat uses `jonathan@gmail.com`
+- Both are the same person → manually link
+
+### Linking Identities with the Script
+
+```bash
+cd /path/to/slack-vertex-ai-middleware
+
+# Step 1: Find the user IDs
+python scripts/check_user_identities.py
+
+# Example output:
+# User abc123:
+#   Name: Jonathan Cavell
+#   Email: jonathan@company.com
+#   Identities:
+#     - slack: U0ABC123 (Jonathan Cavell)
+#     - google_chat: users/123456 (Jonathan)
+#
+# User xyz789:
+#   Name: Jonathan
+#   Identities:
+#     - telegram: 987654321 (Jonathan)
+
+# Step 2: Link the Telegram identity to the existing user
+python scripts/link_identities.py \
+  --user-id abc123 \
+  --platform telegram \
+  --platform-user-id 987654321 \
+  --display-name "Jonathan"
+
+# Output:
+# ✓ Added telegram identity to user abc123
+# User now has 3 platform identities:
+#   - slack: U0ABC123 (Jonathan Cavell)
+#   - google_chat: users/123456 (Jonathan)
+#   - telegram: 987654321 (Jonathan)
+```
+
+### Script Parameters
+
+- `--user-id`: The Firestore user document ID to add the identity to (keep this user)
+- `--platform`: Platform name (`slack`, `google_chat`, `telegram`)
+- `--platform-user-id`: Platform-specific user ID (from the duplicate user)
+- `--display-name`: User's display name on that platform
+- `--project-id`: Optional, defaults to `vertex-ai-middleware-prod`
+
+### Benefits of Linked Identities
+
+1. **Unified Conversations**: Same session across all platforms
+2. **Consistent Personalization**: Agent recognizes you everywhere
+3. **Centralized History**: All interactions in one place
+4. **Flexible Communication**: Use whichever platform is convenient
+
+### Example: Cross-Platform Experience
+
+```
+Monday 9 AM - Slack:
+  You: "What should I focus on today?"
+  Bot: "Based on your goals, prioritize the marketing proposal."
+
+Tuesday 3 PM - Telegram (on your phone):
+  You: "How did the marketing proposal go?"
+  Bot: "I don't have an update yet. Let me know when you complete it!"
+
+Wednesday 10 AM - Google Chat (on web):
+  You: "I finished the marketing proposal!"
+  Bot: "Great work, Jonathan! What's next on your list?"
+```
+
+All three conversations are part of the same session because your identities are linked.
+
+### Checking Current Identities
+
+```bash
+# View all users and their linked identities
+python scripts/check_user_identities.py
+
+# View specific user by Firestore ID
+gcloud firestore documents describe abc123 \
+  --collection=users \
+  --project=vertex-ai-middleware-prod
+```
+
+### Unlinking Identities
+
+If you need to unlink an identity (rare), edit the user document in Firestore:
+
+1. Go to Firestore console
+2. Navigate to `users` → your user document
+3. Edit the `identities` array
+4. Remove the unwanted identity entry
+5. Update `updated_at` timestamp
 
 ---
 

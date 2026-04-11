@@ -9,7 +9,7 @@ class AgentPlatformConfig(BaseModel):
 
     Each platform has its own authentication and configuration requirements.
     """
-    platform: str = Field(..., description="Platform name (slack, google_chat)")
+    platform: str = Field(..., description="Platform name (slack, google_chat, telegram)")
     enabled: bool = Field(default=True, description="Whether this platform is active")
 
     # Slack-specific fields
@@ -39,6 +39,24 @@ class AgentPlatformConfig(BaseModel):
     google_chat_bot_name: Optional[str] = Field(
         default=None,
         description="Google Chat bot resource name"
+    )
+
+    # Telegram-specific fields
+    telegram_bot_token: Optional[str] = Field(
+        default=None,
+        description="Direct Telegram bot token from BotFather (use telegram_bot_token_secret instead for production)"
+    )
+    telegram_bot_token_secret: Optional[str] = Field(
+        default=None,
+        description="Secret Manager secret name for Telegram bot token (e.g., 'my-agent-telegram-token')"
+    )
+    telegram_bot_token_project_id: Optional[str] = Field(
+        default=None,
+        description="GCP project ID where the Telegram bot token secret is stored"
+    )
+    telegram_webhook_secret: Optional[str] = Field(
+        default=None,
+        description="Secret token for Telegram webhook verification (X-Telegram-Bot-Api-Secret-Token)"
     )
 
 
@@ -120,3 +138,7 @@ class Agent(BaseModel):
     def get_google_chat_config(self) -> Optional[AgentPlatformConfig]:
         """Get Google Chat platform configuration (convenience method)."""
         return self.get_platform_config("google_chat")
+
+    def get_telegram_config(self) -> Optional[AgentPlatformConfig]:
+        """Get Telegram platform configuration (convenience method)."""
+        return self.get_platform_config("telegram")

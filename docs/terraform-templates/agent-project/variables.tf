@@ -1,5 +1,5 @@
 variable "project_id" {
-  description = "GCP Project ID for the Google Chat bot (must be globally unique)"
+  description = "GCP Project ID for the agent (must be globally unique)"
   type        = string
 }
 
@@ -25,27 +25,27 @@ variable "region" {
 }
 
 variable "bot_name" {
-  description = "Display name for the Google Chat bot"
+  description = "Display name for the agent/bot (used across platforms)"
   type        = string
 }
 
 variable "bot_account_id" {
-  description = "Service account ID (lowercase, hyphens only, max 30 chars)"
+  description = "Service account ID base (lowercase, hyphens only, max 30 chars). Used for service accounts and secret names."
   type        = string
 }
 
 variable "bot_description" {
-  description = "Description of what the bot does"
+  description = "Description of what the agent/bot does (used for Google Chat configuration)"
   type        = string
 }
 
 variable "bot_avatar_url" {
-  description = "URL for the bot's avatar image (optional)"
+  description = "URL for the bot's avatar image (used for Google Chat, optional)"
   type        = string
   default     = ""
 }
 
 variable "secret_name" {
-  description = "Name for the secret in Secret Manager (in middleware project)"
+  description = "Name for the Google Chat service account secret in Secret Manager"
   type        = string
 }

@@ -10,8 +10,13 @@ This Terraform template creates dedicated GCP infrastructure for agents that req
 - ✅ Requires organizational separation from middleware
 
 **Skip this template if your agent:**
-- ❌ Only uses Slack (no dedicated infrastructure needed)
+- ❌ Only uses Slack and/or Telegram (no dedicated infrastructure needed)
 - ❌ Doesn't access Google APIs
+
+**Note for Slack/Telegram only agents:**
+- Slack: Create bot in Slack UI, store token in middleware's Secret Manager
+- Telegram: Create bot via @BotFather, store token in middleware's Secret Manager
+- No dedicated GCP project required!
 
 ## What This Creates
 
@@ -23,22 +28,27 @@ For agents that need dedicated infrastructure, this creates:
 
 ## What This Creates
 
+For agents that need dedicated infrastructure:
 - New GCP project
 - Required APIs enabled (customizable per agent)
-- Service account for the agent with necessary permissions
+- Service accounts for the agent with necessary permissions:
+  - Google APIs SA (for Drive, Sheets, Docs access)
+  - Platform bot SA (for Google Chat)
 - Organization policy override to allow service account key creation
+- Staging bucket for ADK deployments
+- Secrets for platform credentials (Slack, Telegram, Google Chat)
 - Outputs with next steps for configuration
 
-## Slack-Only Agents
+## Slack/Telegram-Only Agents
 
-If your agent **only uses Slack** and doesn't need Google APIs:
+If your agent **only uses Slack and/or Telegram** and doesn't need Google APIs:
 
 **You don't need this template!** Simply:
-1. Create your Slack bot in the Slack UI
-2. Store the bot token in the middleware's Secret Manager
+1. **Slack**: Create bot in Slack UI → store token in middleware's Secret Manager
+2. **Telegram**: Create bot via @BotFather → store token in middleware's Secret Manager
 3. Register your agent with the middleware using `scripts/deploy_agent.py`
 
-No dedicated GCP infrastructure required.
+No dedicated GCP infrastructure required for Slack/Telegram!
 
 ## Prerequisites
 

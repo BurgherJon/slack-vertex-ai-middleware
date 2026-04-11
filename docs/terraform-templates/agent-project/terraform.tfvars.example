@@ -1,18 +1,49 @@
 # Copy this file to terraform.tfvars and fill in your values
 # terraform.tfvars is git-ignored to keep your configuration private
 
+# ==============================================================================
 # GCP Project Configuration
-project_id       = "my-agent-chat-prod"        # Must be globally unique
-project_name     = "My Agent Google Chat"
+# ==============================================================================
+project_id       = "my-agent-prod"              # Must be globally unique
+project_name     = "My Agent"                   # Human-readable name
 organization_id  = "123456789012"               # Your GCP org ID
 billing_account  = "ABCD12-34EF56-7890AB"       # Your billing account ID
-region           = "us-central1"
+region           = "us-central1"                # Default region
 
-# Bot Configuration
-bot_name         = "My Agent"
+# ==============================================================================
+# Agent/Bot Configuration
+# ==============================================================================
+bot_name         = "My Agent"                   # Display name (all platforms)
 bot_account_id   = "my-agent"                   # lowercase, hyphens only, max 30 chars
-bot_description  = "AI assistant powered by Vertex AI"
-bot_avatar_url   = ""                           # Optional: URL to bot avatar image
+                                                # Used for: service accounts, secret names
+                                                # Examples:
+                                                #   - my-agent-apis@PROJECT.iam.gserviceaccount.com
+                                                #   - my-agent-slack-token (Secret Manager)
+                                                #   - my-agent-telegram-token (Secret Manager)
 
-# Secret Manager Configuration (for the middleware project)
-secret_name      = "my-agent-credentials"       # Name in middleware's Secret Manager
+bot_description  = "AI assistant powered by Vertex AI"  # For Google Chat config
+bot_avatar_url   = ""                           # Optional: For Google Chat avatar
+
+# ==============================================================================
+# Secret Manager Configuration
+# ==============================================================================
+secret_name      = "my-agent-credentials"       # Google Chat service account secret name
+
+# ==============================================================================
+# Platform-Specific Notes
+# ==============================================================================
+# After running terraform apply, you'll manually create these secrets:
+#
+# SLACK (if using):
+#   Secret: {bot_account_id}-slack-token
+#   Value: xoxb-... (from Slack OAuth & Permissions)
+#
+# TELEGRAM (if using):
+#   Secret: {bot_account_id}-telegram-token
+#   Value: 1234567890:ABC... (from @BotFather)
+#
+# GOOGLE CHAT (if using):
+#   Secret: {secret_name}
+#   Value: Service account key JSON (from gcloud iam service-accounts keys create)
+#
+# See main.tf SECTION 2, 3, 4 outputs for exact commands!
