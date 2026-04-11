@@ -158,7 +158,7 @@ class MessageProcessorV2:
                 return
 
             # Build message text with user identity prefix
-            message_text = f"[From: {user.primary_name} | {event.platform}_id: {event.user_id}] {event.message_text}"
+            message_text = f"[From: {user.primary_name}] {event.message_text}"
 
             # Embed image references in the message text
             if images:
