@@ -86,6 +86,48 @@ async def test_add_user_identity_appends(fake_firestore):
     assert fetched.has_platform("google_chat")
 
 
+# ---- Unified name resolution (the-forum#9) ----
+
+
+async def test_get_user_by_any_name_matches_primary_name(fake_firestore):
+    uid = await fake_firestore.create_user(
+        User(primary_name="Alice", identities=[
+            PlatformIdentity(platform="slack", platform_user_id="U_001"),
+        ])
+    )
+    assert (await fake_firestore.get_user_by_any_name("Alice")).id == uid
+
+
+async def test_get_user_by_any_name_matches_platform_display_name(fake_firestore):
+    # Name appears only as a Slack display name, not as primary_name.
+    uid = await fake_firestore.create_user(
+        User(primary_name="Alice Smith", identities=[
+            PlatformIdentity(
+                platform="slack", platform_user_id="U_001", display_name="alice.s"
+            ),
+        ])
+    )
+    assert (await fake_firestore.get_user_by_any_name("alice.s")).id == uid
+
+
+async def test_get_user_by_any_name_is_case_insensitive(fake_firestore):
+    uid = await fake_firestore.create_user(
+        User(primary_name="Alice", identities=[
+            PlatformIdentity(platform="slack", platform_user_id="U_001"),
+        ])
+    )
+    assert (await fake_firestore.get_user_by_any_name("  aLiCe ")).id == uid
+
+
+async def test_get_user_by_any_name_returns_none_for_unknown(fake_firestore):
+    await fake_firestore.create_user(
+        User(primary_name="Alice", identities=[
+            PlatformIdentity(platform="slack", platform_user_id="U_001"),
+        ])
+    )
+    assert await fake_firestore.get_user_by_any_name("Bob") is None
+
+
 # ---- Sessions ----
 
 

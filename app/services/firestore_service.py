@@ -656,64 +656,74 @@ class FirestoreService:
             logger.error(f"Error fetching user by email {email}: {e}")
             return None
 
-    async def get_user_by_primary_name(self, primary_name: str) -> Optional[User]:
+    async def get_user_by_any_name(self, name: str) -> Optional[User]:
         """
-        Find a user by their primary_name (the canonical display name shown
-        in the `[From: <name>] ...` message prefix the agent sees).
+        Resolve a free-text name to a single canonical user.
 
-        Used by the scheduler MCP server: the agent passes the user's name
-        from the message prefix, and the middleware resolves it to a real
-        user_id before creating/listing jobs. This avoids exposing the
-        Firestore document ID to the LLM at all.
+        This is the unified user-resolution used by the scheduler MCP server.
+        The agent passes the name from the `[From: <name>] ...` message prefix,
+        which may match either the user's canonical ``primary_name`` OR any of
+        their per-platform ``display_name`` values (e.g. a Slack handle). The
+        match is case-insensitive and whitespace-trimmed.
 
-        Behavior on multiple matches: logs a warning and returns the FIRST
-        match. primary_name is not enforced unique today, but the only way
-        to hit a collision is if two real humans share an exact name. If
-        that happens, treat as an operational issue (rename one, or add
-        disambiguation upstream) — the LLM has no way to pick correctly.
+        Resolution must be *deterministic*: ``create`` and ``list`` both call
+        this, so for a given name they must always land on the same user
+        record even when two users could match. We therefore sort all matches
+        by ``created_at`` (then ``id`` as a tiebreaker) and return the first.
+        A plain ``primary_name``-only equality query returned a
+        non-deterministic "first match" from the stream, which let ``create``
+        and ``list`` disagree.
+
+        Volume is small (one row per real human across all platforms), so an
+        unfiltered scan + in-memory match is fine — same approach as
+        ``list_users``.
 
         Args:
-            primary_name: Exact primary_name as stored on the user doc
+            name: Free-text name from the message prefix.
 
         Returns:
-            User if exactly one match exists; the first match (with a
-            warning logged) if multiple exist; None if no match
+            The single canonical User if at least one matches; None otherwise.
         """
+        if not name or not name.strip():
+            return None
+        needle = name.strip().casefold()
+
         try:
-            query = (
-                self.client.collection(self.users_collection)
-                .where("primary_name", "==", primary_name)
-                .limit(2)
-            )
-            docs = [d async for d in query.stream()]
-
-            if not docs:
-                logger.debug(f"No user found for primary_name: {primary_name!r}")
-                return None
-            if len(docs) > 1:
-                logger.warning(
-                    f"Multiple users have primary_name={primary_name!r}; "
-                    f"returning the first ({docs[0].id}). "
-                    f"Resolve by renaming one of the users."
+            matches: list[User] = []
+            async for doc in self.client.collection(self.users_collection).stream():
+                data = doc.to_dict()
+                candidates = [data.get("primary_name")]
+                candidates.extend(
+                    identity.get("display_name")
+                    for identity in data.get("identities", [])
                 )
+                if any(
+                    isinstance(c, str) and c.strip().casefold() == needle
+                    for c in candidates
+                ):
+                    for field in ["created_at", "updated_at"]:
+                        if field in data:
+                            data[field] = to_aware_utc(data[field])
+                    for identity in data.get("identities", []):
+                        if "linked_at" in identity:
+                            identity["linked_at"] = to_aware_utc(identity["linked_at"])
+                    matches.append(User(**data, id=doc.id))
 
-            data = docs[0].to_dict()
-
-            # Handle Firestore timestamps (mirrors get_user_by_email)
-            for field in ["created_at", "updated_at"]:
-                if field in data:
-                    data[field] = to_aware_utc(data[field])
-            if "identities" in data:
-                for identity in data["identities"]:
-                    if "linked_at" in identity:
-                        identity["linked_at"] = to_aware_utc(identity["linked_at"])
-
-            user = User(**data, id=docs[0].id)
-            logger.debug(f"Found user {user.id} for primary_name: {primary_name!r}")
+            if not matches:
+                logger.debug(f"No user found for name: {name!r}")
+                return None
+            if len(matches) > 1:
+                logger.warning(
+                    f"Name {name!r} matched {len(matches)} users; returning the "
+                    f"canonical (earliest-created) one. Disambiguate upstream if wrong."
+                )
+            matches.sort(key=lambda u: (u.created_at, u.id or ""))
+            user = matches[0]
+            logger.debug(f"Resolved name {name!r} to user {user.id}")
             return user
 
         except Exception as e:
-            logger.error(f"Error fetching user by primary_name {primary_name!r}: {e}")
+            logger.error(f"Error resolving user by name {name!r}: {e}")
             return None
 
     async def list_users(self) -> List[User]:

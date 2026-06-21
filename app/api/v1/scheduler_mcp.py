@@ -191,7 +191,46 @@ TOOLS: list[Tool] = [
             "Permanently delete a scheduled reminder. To find the job_id, call "
             "list_scheduled_reminders first. The job must have been created by "
             "this agent. There is no undo — if the user might want it back, "
-            "consider update_scheduled_reminder with enabled=false instead."
+            "consider pause_scheduled_reminder instead."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "The reminder's id, as returned by list_scheduled_reminders.",
+                },
+            },
+            "required": ["job_id"],
+        },
+    ),
+    Tool(
+        name="pause_scheduled_reminder",
+        description=(
+            "Pause a scheduled reminder so it stops firing but stays in the "
+            "system. Use this instead of delete when the user might want it back "
+            "later — resume_scheduled_reminder reactivates it. To find the "
+            "job_id, call list_scheduled_reminders first. The job must have been "
+            "created by this agent."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "The reminder's id, as returned by list_scheduled_reminders.",
+                },
+            },
+            "required": ["job_id"],
+        },
+    ),
+    Tool(
+        name="resume_scheduled_reminder",
+        description=(
+            "Resume a previously paused scheduled reminder so it starts firing "
+            "again on its schedule. To find the job_id, call "
+            "list_scheduled_reminders first. The job must have been created by "
+            "this agent."
         ),
         inputSchema={
             "type": "object",
@@ -247,6 +286,12 @@ async def _resolve_user_id_from_name(user_name: Any) -> str:
     name doesn't resolve, we raise with a message that nudges the LLM to
     fix what it sent — this is the validation that makes the bug class
     "LLM put the display name in user_id" impossible from the new path.
+
+    Resolution goes through FirestoreService.get_user_by_any_name, which all
+    four tools share. It matches the name (case-insensitively) against the
+    user's primary_name AND any per-platform display name, and resolves to a
+    single canonical record deterministically — so create / list / update /
+    delete always agree on which user a given name maps to.
     """
     if not isinstance(user_name, str) or not user_name.strip():
         raise ValueError(
@@ -254,7 +299,7 @@ async def _resolve_user_id_from_name(user_name: Any) -> str:
             "'[From: <name>] ...' prefix of their most recent message."
         )
     name = user_name.strip()
-    user = await _firestore().get_user_by_primary_name(name)
+    user = await _firestore().get_user_by_any_name(name)
     if not user:
         raise ValueError(
             f"No user found with name {name!r}. Pass the exact name from the "
@@ -323,6 +368,14 @@ async def _handle_delete(args: dict[str, Any]) -> str:
     return json.dumps({"success": success, "job_id": job_id})
 
 
+async def _handle_set_enabled(args: dict[str, Any], enabled: bool) -> str:
+    """Shared pause/resume: flip the enabled flag on an owned job."""
+    job_id = args["job_id"]
+    await _load_owned_job(job_id)
+    job = await _service().update_job(job_id, ScheduledJobUpdate(enabled=enabled))
+    return json.dumps(_job_to_dict(job))
+
+
 # ---------------------------------------------------------------------------
 # MCP Server registration
 # ---------------------------------------------------------------------------
@@ -345,6 +398,10 @@ def _build_server() -> Server:
                 result = await _handle_update(args)
             elif name == "delete_scheduled_reminder":
                 result = await _handle_delete(args)
+            elif name == "pause_scheduled_reminder":
+                result = await _handle_set_enabled(args, enabled=False)
+            elif name == "resume_scheduled_reminder":
+                result = await _handle_set_enabled(args, enabled=True)
             else:
                 raise ValueError(f"Unknown tool: {name}")
             return [TextContent(type="text", text=result)]

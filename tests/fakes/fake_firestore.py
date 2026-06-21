@@ -274,11 +274,26 @@ class FakeFirestoreService:
                 return User(**data, id=uid)
         return None
 
-    async def get_user_by_primary_name(self, primary_name: str) -> Optional[User]:
+    async def get_user_by_any_name(self, name: str) -> Optional[User]:
+        if not name or not name.strip():
+            return None
+        needle = name.strip().casefold()
+        matches = []
         for uid, data in self.users.items():
-            if data.get("primary_name") == primary_name:
-                return User(**data, id=uid)
-        return None
+            candidates = [data.get("primary_name")]
+            candidates.extend(
+                identity.get("display_name")
+                for identity in data.get("identities", [])
+            )
+            if any(
+                isinstance(c, str) and c.strip().casefold() == needle
+                for c in candidates
+            ):
+                matches.append(User(**data, id=uid))
+        if not matches:
+            return None
+        matches.sort(key=lambda u: (u.created_at, u.id or ""))
+        return matches[0]
 
     async def list_users(self) -> List[User]:
         users = []
