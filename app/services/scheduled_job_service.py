@@ -51,6 +51,25 @@ class ScheduledJobService:
         except (ValueError, KeyError):
             return False
 
+    @staticmethod
+    def _cron_error_message(cron: str) -> str:
+        """LLM-friendly cron error: says what's expected and gives an example."""
+        return (
+            f"Invalid cron expression: {cron!r}. Use a 5-field cron string "
+            f"'minute hour day-of-month month day-of-week' — for example "
+            f"'0 9 * * 1-5' for 9:00 AM Monday through Friday, or '30 18 * * *' "
+            f"for 6:30 PM every day. Fix the schedule and try again."
+        )
+
+    @staticmethod
+    def _timezone_error_message(tz: str) -> str:
+        """LLM-friendly timezone error: says to use an IANA name, with examples."""
+        return (
+            f"Invalid timezone: {tz!r}. Use an IANA timezone name such as "
+            f"'America/New_York', 'Europe/London', or 'UTC'. Fix the timezone "
+            f"and try again."
+        )
+
     def _is_job_due(self, job: ScheduledJob) -> bool:
         """
         Check if a job is due to run based on its cron schedule or retry time.
@@ -133,33 +152,87 @@ class ScheduledJobService:
         logger.info(f"Found {len(due_jobs)} jobs due out of {len(jobs)} enabled jobs")
         return due_jobs
 
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """Identity key used for upsert dedup: trimmed + case-folded."""
+        return name.strip().casefold()
+
+    async def _find_existing_job(
+        self, agent_id: str, user_id: str, name: str
+    ) -> Optional[ScheduledJob]:
+        """
+        Find a job that shares the upsert identity (agent_id, user_id, name).
+
+        Name match is normalized (trimmed, case-insensitive) so trivially
+        different casing/whitespace doesn't create a duplicate. Volume per
+        (agent, user) is tiny, so an in-memory scan of their jobs is fine.
+        """
+        target = self._normalize_name(name)
+        jobs = await self.firestore.list_scheduled_jobs(
+            agent_id=agent_id, user_id=user_id
+        )
+        for job in jobs:
+            if self._normalize_name(job.name) == target:
+                return job
+        return None
+
     async def create_job(self, job_data: ScheduledJobCreate) -> ScheduledJob:
         """
-        Create a new scheduled job.
+        Create a scheduled job, or update the existing one in place (upsert).
+
+        To guarantee a forgetful or buggy agent can never proliferate
+        duplicate reminders, this is idempotent on the identity
+        (agent_id, user_id, name): if a job with that identity already
+        exists, its schedule / prompt / timezone / output_platform are
+        updated in place (and it's re-enabled) rather than inserting a
+        second job. See Comites-ai/the-forum#8.
 
         Args:
             job_data: Job creation data
 
         Returns:
-            Created ScheduledJob
+            The created or updated ScheduledJob
 
         Raises:
             ValueError: If validation fails
         """
         # Validate cron expression
         if not self._validate_cron_expression(job_data.schedule):
-            raise ValueError(f"Invalid cron expression: {job_data.schedule}")
+            raise ValueError(self._cron_error_message(job_data.schedule))
 
         # Validate timezone
         try:
             pytz.timezone(job_data.timezone)
         except pytz.UnknownTimeZoneError:
-            raise ValueError(f"Invalid timezone: {job_data.timezone}")
+            raise ValueError(self._timezone_error_message(job_data.timezone))
 
         # Validate agent exists
         agent = await self.firestore.get_agent_by_id(job_data.agent_id)
         if not agent:
             raise ValueError(f"Agent not found: {job_data.agent_id}")
+
+        # Upsert: if a job with the same identity exists, update it in place
+        # rather than inserting a duplicate.
+        existing = await self._find_existing_job(
+            job_data.agent_id, job_data.user_id, job_data.name
+        )
+        if existing:
+            updated = await self.firestore.update_scheduled_job(
+                existing.id,
+                {
+                    "name": job_data.name,
+                    "prompt": job_data.prompt,
+                    "schedule": job_data.schedule,
+                    "timezone": job_data.timezone,
+                    "output_platform": job_data.output_platform,
+                    "enabled": True,
+                },
+            )
+            logger.info(
+                f"Upserted (updated existing) scheduled job: "
+                f"{job_data.name} (id: {existing.id})"
+            )
+            return updated
 
         # Create Firestore document
         job = await self.firestore.create_scheduled_job(job_data.model_dump())
@@ -190,14 +263,14 @@ class ScheduledJobService:
 
         # Validate cron if being updated
         if "schedule" in update_dict and not self._validate_cron_expression(update_dict["schedule"]):
-            raise ValueError(f"Invalid cron expression: {update_dict['schedule']}")
+            raise ValueError(self._cron_error_message(update_dict["schedule"]))
 
         # Validate timezone if being updated
         if "timezone" in update_dict:
             try:
                 pytz.timezone(update_dict["timezone"])
             except pytz.UnknownTimeZoneError:
-                raise ValueError(f"Invalid timezone: {update_dict['timezone']}")
+                raise ValueError(self._timezone_error_message(update_dict["timezone"]))
 
         # Update Firestore
         updated_job = await self.firestore.update_scheduled_job(job_id, update_dict)

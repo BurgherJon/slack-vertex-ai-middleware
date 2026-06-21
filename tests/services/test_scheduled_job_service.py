@@ -105,3 +105,52 @@ async def test_update_job_changes_fields(service, agent_id_in_firestore):
 
 async def test_update_job_returns_none_when_missing(service):
     assert await service.update_job("nope", ScheduledJobUpdate(enabled=False)) is None
+
+
+# ---- idempotent upsert (the-forum#8) ----
+
+
+async def test_create_job_is_idempotent_on_identity(service, agent_id_in_firestore):
+    first = await service.create_job(_make_create(name="morning check-in"))
+    second = await service.create_job(
+        _make_create(name="morning check-in", prompt="updated prompt", schedule="0 8 * * *")
+    )
+    # Same job, updated in place — not a duplicate.
+    assert second.id == first.id
+    assert second.prompt == "updated prompt"
+    assert second.schedule == "0 8 * * *"
+    all_jobs = await service.list_jobs(agent_id="agent-1", user_id="user-1")
+    assert len(all_jobs) == 1
+
+
+async def test_upsert_identity_is_case_and_whitespace_insensitive(service, agent_id_in_firestore):
+    first = await service.create_job(_make_create(name="Morning Check-In"))
+    second = await service.create_job(_make_create(name="  morning check-in  "))
+    assert second.id == first.id
+    assert len(await service.list_jobs(agent_id="agent-1", user_id="user-1")) == 1
+
+
+async def test_upsert_reenables_a_paused_job(service, agent_id_in_firestore):
+    job = await service.create_job(_make_create(name="daily"))
+    await service.update_job(job.id, ScheduledJobUpdate(enabled=False))
+    revived = await service.create_job(_make_create(name="daily"))
+    assert revived.id == job.id
+    assert revived.enabled is True
+
+
+async def test_upsert_scopes_identity_by_user_and_agent(service, agent_id_in_firestore):
+    # Same name, different user => distinct jobs.
+    await service.create_job(_make_create(name="check-in", user_id="user-1"))
+    await service.create_job(_make_create(name="check-in", user_id="user-2"))
+    assert len(await service.list_jobs(user_id="user-1")) == 1
+    assert len(await service.list_jobs(user_id="user-2")) == 1
+
+
+async def test_cron_error_message_is_actionable(service, agent_id_in_firestore):
+    with pytest.raises(ValueError, match="5-field"):
+        await service.create_job(_make_create(schedule="not a cron"))
+
+
+async def test_timezone_error_message_is_actionable(service, agent_id_in_firestore):
+    with pytest.raises(ValueError, match="IANA"):
+        await service.create_job(_make_create(timezone="Mars/Olympus_Mons"))
