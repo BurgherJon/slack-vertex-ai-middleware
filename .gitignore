@@ -107,3 +107,6 @@ migration-*.md
 migration-outputs.json
 migration-data/
 MIGRATION_CHECKLIST.md
+
+# Claude Code local instructions
+CLAUDE.md
