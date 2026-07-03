@@ -51,6 +51,33 @@ resource "google_project_organization_policy" "allow_cross_project_sa_runtime" {
   }
 }
 
+# Block creation of VMs that use the deprecated container startup agent
+# (konlet, configured via the gce-container-declaration metadata key).
+# Google is discontinuing the agent — new konlet VMs are refused
+# platform-wide starting July 31, 2026 — and the discord-worker VM has
+# been migrated to a cloud-init systemd unit (see discord_worker.tf).
+# Enforcing the constraint now guarantees the deprecated pattern can't
+# creep back in before Google's cutoff. Running instances are
+# unaffected; the constraint only blocks new VM/MIG creation.
+#   Deprecation notice: https://cloud.google.com/compute/docs/deprecations/container-startup-agent-on-compute
+#   Constraint docs:    https://cloud.google.com/compute/docs/containers/prevent-konlet-vms
+#
+# Managed constraints (compute.managed.*) are only settable through the
+# Org Policy v2 API, hence google_org_policy_policy here rather than
+# the legacy google_project_organization_policy used above.
+resource "google_org_policy_policy" "disable_container_startup_agent_vms" {
+  name   = "projects/${var.project_id}/policies/compute.managed.disableVmsWithContainerStartupAgent"
+  parent = "projects/${var.project_id}"
+
+  spec {
+    rules {
+      enforce = "TRUE"
+    }
+  }
+
+  depends_on = [google_project_service.orgpolicy]
+}
+
 resource "google_project_organization_policy" "discord_worker_external_ip" {
   count      = var.use_discord ? 1 : 0
   project    = var.project_id
