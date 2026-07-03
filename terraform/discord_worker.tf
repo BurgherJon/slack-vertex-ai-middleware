@@ -197,6 +197,16 @@ locals {
         RestartSec=10
 
     runcmd:
+    # Remove any leftover konlet-era container (klt-*). Konlet baked
+    # restartPolicy=Always into the container it created, so on a VM
+    # migrated from gce-container-declaration the old container survives
+    # on the boot disk and the docker daemon happily restarts it on
+    # every boot — alongside ours, doubling every Gateway connection
+    # and DM forward. Observed in prod during the 2026-07 migration.
+    # TODO(2026-09): remove this cleanup step and comment once every
+    # operator VM has been through the migration — it is a no-op after
+    # the first post-migration boot.
+    - docker ps -aq --filter name=klt- | xargs -r docker rm -f
     - systemctl daemon-reload
     - systemctl start discord-worker.service
   EOT
