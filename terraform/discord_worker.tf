@@ -33,6 +33,15 @@
 #   when discord.py, the Python base image, or any other dependency ships
 #   a security fix. See docs/DISCORD_WORKER.md for the redeploy runbook;
 #   review and rebuild quarterly or sooner if a CVE is reported.
+#
+# CONTAINER LAUNCH MECHANISM:
+#   The container is started by a cloud-init (`user-data`) systemd unit,
+#   NOT the legacy `gce-container-declaration` metadata key. Google
+#   discontinued the container startup agent (konlet) behind that key:
+#   new VMs using it are blocked from July 31, 2026 and existing ones
+#   are unsupported after July 31, 2027.
+#     Deprecation notice: https://cloud.google.com/compute/docs/deprecations/container-startup-agent-on-compute
+#     Migration guide:    https://cloud.google.com/compute/docs/containers/migrate-containers
 # =============================================================================
 
 # Artifact Registry repo that holds the worker container image. Cloud
@@ -144,8 +153,57 @@ resource "google_project_iam_member" "discord_worker_monitoring" {
   member  = "serviceAccount:${google_service_account.discord_worker[0].email}"
 }
 
-# The VM itself. Container-Optimized OS (COS) pulls and runs the worker
-# image declared in gce-container-declaration. COS receives automatic
+# cloud-init config that runs the worker container as a systemd unit.
+# This replaces the deprecated gce-container-declaration / container
+# startup agent (konlet) and reproduces its behavior: authenticate to
+# Artifact Registry with the VM's service account, pull the pinned image
+# on every unit start (so `instances reset` picks up a repushed tag,
+# same as konlet did), and restart the container on failure.
+#
+# COS re-runs cloud-init on every boot, so the unit file — which lives
+# on the stateless /etc — is rewritten and started each time the VM
+# comes up. Deprecation notice:
+# https://cloud.google.com/compute/docs/deprecations/container-startup-agent-on-compute
+locals {
+  # Registry host (e.g. us-central1-docker.pkg.dev) extracted from the
+  # image URL so docker-credential-gcr targets the right endpoint.
+  discord_worker_registry = split("/", var.discord_worker_image)[0]
+
+  discord_worker_cloud_init = <<-EOT
+    #cloud-config
+
+    write_files:
+    - path: /etc/systemd/system/discord-worker.service
+      permissions: "0644"
+      owner: root
+      content: |
+        [Unit]
+        Description=Discord Gateway worker container
+        Wants=gcr-online.target
+        After=gcr-online.target
+
+        [Service]
+        Environment="HOME=/home/discord-worker"
+        ExecStartPre=/usr/bin/docker-credential-gcr configure-docker --registries=${local.discord_worker_registry}
+        ExecStartPre=-/usr/bin/docker rm -f discord-worker
+        ExecStartPre=/usr/bin/docker pull ${var.discord_worker_image}
+        ExecStart=/usr/bin/docker run --rm --name=discord-worker \
+          -e FORUM_URL=${google_cloud_run_v2_service.forum.uri} \
+          -e FIRESTORE_PROJECT_ID=${var.project_id} \
+          -e LOG_LEVEL=INFO \
+          ${var.discord_worker_image}
+        ExecStop=/usr/bin/docker stop discord-worker
+        Restart=always
+        RestartSec=10
+
+    runcmd:
+    - systemctl daemon-reload
+    - systemctl start discord-worker.service
+  EOT
+}
+
+# The VM itself. Container-Optimized OS (COS) runs the worker container
+# via the cloud-init systemd unit above. COS receives automatic
 # security updates from Google for the OS; the container image is pinned
 # and is YOUR responsibility to rebuild — see docs/DISCORD_WORKER.md.
 resource "google_compute_instance" "discord_worker" {
@@ -184,25 +242,10 @@ resource "google_compute_instance" "discord_worker" {
   }
 
   metadata = {
-    # COS reads gce-container-declaration and runs the resulting
-    # container automatically. No per-agent env vars here — the worker
-    # discovers its bot list from Firestore at runtime.
-    gce-container-declaration = yamlencode({
-      spec = {
-        containers = [{
-          name  = "discord-worker"
-          image = var.discord_worker_image
-          env = [
-            { name = "FORUM_URL", value = google_cloud_run_v2_service.forum.uri },
-            { name = "FIRESTORE_PROJECT_ID", value = var.project_id },
-            { name = "LOG_LEVEL", value = "INFO" },
-          ]
-          stdin = false
-          tty   = false
-        }]
-        restartPolicy = "Always"
-      }
-    })
+    # cloud-init runs the worker container via the systemd unit in
+    # locals above. No per-agent env vars here — the worker discovers
+    # its bot list from Firestore at runtime.
+    user-data = local.discord_worker_cloud_init
 
     google-logging-enabled    = "true"
     google-monitoring-enabled = "true"
