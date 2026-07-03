@@ -70,6 +70,16 @@ resource "google_project_service" "iamcredentials" {
   disable_on_destroy = false
 }
 
+# Org Policy API — needed to set the managed constraint in org_policy.tf
+# that blocks the deprecated container startup agent. The legacy
+# google_project_organization_policy resources go through the Resource
+# Manager API, but compute.managed.* constraints are only settable via
+# the Org Policy v2 API, which this service backs.
+resource "google_project_service" "orgpolicy" {
+  service            = "orgpolicy.googleapis.com"
+  disable_on_destroy = false
+}
+
 # Compute Engine API — needed only by the discord-worker VM. Gated on
 # var.use_discord so a default-config terraform apply does not enable
 # this API on projects that don't want it. API enablement itself is free

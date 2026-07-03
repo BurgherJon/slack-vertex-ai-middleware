@@ -53,4 +53,13 @@ terraform {
 provider "google" {
   project = var.project_id
   region  = var.region
+
+  # The Org Policy v2 API (used by google_org_policy_policy in
+  # org_policy.tf) rejects requests from user Application Default
+  # Credentials unless a quota project is sent with the call. These two
+  # settings make the provider bill/quota every request against your
+  # own project instead of the ADC default. Requires the caller to hold
+  # serviceusage.services.use on the project (owner/editor include it).
+  user_project_override = true
+  billing_project       = var.project_id
 }

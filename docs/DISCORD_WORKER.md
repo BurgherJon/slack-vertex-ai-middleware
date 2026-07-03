@@ -75,6 +75,24 @@ the standard `e2-micro` rate — about **$6–7/month**. That's the total
 cost no matter how many Discord agents you onboard; the worker is
 multi-tenant.
 
+## How the container is launched
+
+The VM starts the worker container from a **cloud-init (`user-data`)
+systemd unit** defined in `terraform/discord_worker.tf` — not from the
+legacy `gce-container-declaration` metadata key. Google deprecated the
+container startup agent (konlet) behind that key: creating VMs with it
+is blocked from **July 31, 2026**, and existing instances are
+unsupported after **July 31, 2027**. See Google's
+[deprecation notice](https://cloud.google.com/compute/docs/deprecations/container-startup-agent-on-compute)
+and [migration guide](https://cloud.google.com/compute/docs/containers/migrate-containers).
+
+The unit (`discord-worker.service`) authenticates Docker to Artifact
+Registry with the VM's service account, pulls the pinned image tag on
+every unit start, and restarts the container on failure. Because COS
+re-runs cloud-init on each boot, a `gcloud compute instances reset`
+still pulls and runs the newest image for the tag — the redeploy
+runbook below is unchanged from the konlet days.
+
 ## OS patching and your responsibilities
 
 The VM runs **Container-Optimized OS (COS)** with automatic updates
@@ -249,9 +267,9 @@ gcloud logging read \
 
 ```bash
 gcloud compute ssh discord-worker --zone="${DISCORD_WORKER_ZONE}"
-# Inside the VM:
-docker ps                          # find the container ID
-docker restart <container-id>
+# Inside the VM (the container runs as the discord-worker systemd unit;
+# restarting the unit also re-pulls the image tag):
+sudo systemctl restart discord-worker
 exit
 ```
 
