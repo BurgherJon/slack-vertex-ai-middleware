@@ -24,6 +24,7 @@ The verify_request implementation is a no-op because the route handler
 performs OIDC verification before instantiating this connector.
 """
 import logging
+from datetime import datetime, UTC
 from typing import Optional
 
 import aiohttp
@@ -35,6 +36,9 @@ from app.schemas.platform_event import PlatformEvent
 from app.services.platforms.base import PlatformConnector
 
 logger = logging.getLogger(__name__)
+
+# Discord snowflake epoch: 2015-01-01T00:00:00Z in unix milliseconds.
+DISCORD_EPOCH_MS = 1420070400000
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -314,6 +318,19 @@ class DiscordConnector(PlatformConnector):
                 "file_type": "attachment",
             })
 
+        # The worker payload carries no explicit timestamp, but Discord
+        # message IDs are snowflakes: bits 22+ encode milliseconds since
+        # the Discord epoch (2015-01-01T00:00:00Z), so the ID itself is
+        # the creation time.
+        sent_at = None
+        message_id = data.get("message_id")
+        if message_id:
+            try:
+                ms = (int(message_id) >> 22) + DISCORD_EPOCH_MS
+                sent_at = datetime.fromtimestamp(ms / 1000, tz=UTC)
+            except (ValueError, TypeError, OSError):
+                logger.warning(f"Unparseable Discord message_id: {message_id!r}")
+
         return PlatformEvent(
             platform="discord",
             user_id=user_id,
@@ -321,6 +338,7 @@ class DiscordConnector(PlatformConnector):
             message_text=message_text,
             space_id=channel_id,
             files=files,
+            sent_at=sent_at,
             media_group_id=None,
             raw_event=data,
         )

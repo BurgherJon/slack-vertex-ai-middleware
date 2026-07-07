@@ -21,6 +21,14 @@ def test_parse_event_message():
     assert event.files == []
 
 
+def test_parse_event_extracts_sent_at_from_create_time():
+    from datetime import datetime, UTC
+
+    event = GoogleChatConnector.parse_event(None, load_fixture("google_chat/message.json"))
+    # Fixture createTime is "2026-05-10T15:00:00Z"
+    assert event.sent_at == datetime(2026, 5, 10, 15, 0, tzinfo=UTC)
+
+
 def test_parse_event_with_uploaded_attachment():
     event = GoogleChatConnector.parse_event(
         None, load_fixture("google_chat/message_with_attachment.json")

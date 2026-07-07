@@ -305,6 +305,13 @@ class FakeFirestoreService:
         users.sort(key=lambda u: u.primary_name.lower())
         return users
 
+    async def update_user(self, user_id: str, fields: dict) -> None:
+        data = self.users.get(user_id)
+        if not data:
+            raise ValueError(f"User {user_id} not found")
+        data.update(fields)
+        data["updated_at"] = datetime.now(UTC)
+
     async def add_user_identity(
         self, user_id: str, identity: PlatformIdentity
     ) -> None:

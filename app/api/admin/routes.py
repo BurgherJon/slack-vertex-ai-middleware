@@ -4,9 +4,10 @@
 """Aggregator router for the admin UI (mounted at /admin)."""
 from fastapi import APIRouter
 
-from app.api.admin import agents, auth, jobs
+from app.api.admin import agents, auth, jobs, users
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 router.include_router(auth.router)
 router.include_router(agents.router)
 router.include_router(jobs.router)
+router.include_router(users.router)

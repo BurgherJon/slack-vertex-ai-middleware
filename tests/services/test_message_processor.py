@@ -7,9 +7,12 @@ Exercises:
   PlatformEvent → IdentityService (creates user) → FirestoreService (loads agent)
   → VertexAIService (returns canned response) → PlatformConnector (sends reply)
 """
+from datetime import datetime, UTC
+
 import pytest
 
 from app.models.agent import Agent, AgentPlatformConfig
+from app.models.user import User, PlatformIdentity
 from app.schemas.platform_event import PlatformEvent
 from app.services.identity_service import IdentityService
 from app.services.message_processor_v2 import (
@@ -20,13 +23,20 @@ from app.services.message_processor_v2 import (
 from app.services.vertex_ai_service import VertexAIResponse
 
 
-def _slack_event(text: str = "hello agent", files: list | None = None, media_group_id: str | None = None):
+def _slack_event(
+    text: str = "hello agent",
+    files: list | None = None,
+    media_group_id: str | None = None,
+    platform: str = "slack",
+    sent_at=None,
+):
     return PlatformEvent(
-        platform="slack",
+        platform=platform,
         user_id="U_USER_001",
         message_text=text,
         space_id="C_CHANNEL_001",
         files=files or [],
+        sent_at=sent_at,
         media_group_id=media_group_id,
         raw_event={},
     )
@@ -151,6 +161,99 @@ async def test_non_image_files_warn_and_continue(
     assert "got it" in texts_sent
     sent_to_agent = fake_vertex_ai.messages_sent[0]["message"]
     assert "Note to Agent" in sent_to_agent
+
+
+# 18:30 UTC on a Tuesday; localizations verified against zoneinfo.
+SENT_AT = datetime(2026, 7, 7, 18, 30, tzinfo=UTC)
+
+
+async def test_slack_message_uses_profile_timezone_and_seeds_default(
+    processor, fake_firestore, fake_vertex_ai, fake_connector, seeded_agent
+):
+    fake_vertex_ai.set_text_response(
+        "projects/x/locations/us-central1/reasoningEngines/abc", "ok"
+    )
+    fake_connector.set_user_info({
+        "display_name": "Alice",
+        "email": "alice@example.com",
+        "tz": "America/Chicago",
+        "tz_label": "Central Daylight Time",
+    })
+
+    await processor.process_platform_event(
+        event=_slack_event("hi", sent_at=SENT_AT),
+        connector=fake_connector,
+        agent_id=seeded_agent,
+    )
+
+    sent_to_agent = fake_vertex_ai.messages_sent[0]["message"]
+    assert sent_to_agent.startswith("[From: Alice] ")
+    assert (
+        "[The user sent this message at 1:30 PM on Tuesday, July 7, 2026 "
+        "from the America/Chicago timezone.]"
+    ) in sent_to_agent
+
+    # First Slack message seeds the user's default timezone from the profile
+    user = await fake_firestore.get_user_by_identity("slack", "U_USER_001")
+    assert user.default_timezone == "America/Chicago"
+
+
+async def test_non_slack_message_uses_user_default_timezone(
+    processor, fake_firestore, fake_vertex_ai, seeded_agent
+):
+    from tests.fakes.fake_platform_connector import FakePlatformConnector
+
+    fake_firestore.add_user(
+        User(
+            primary_name="Alice",
+            default_timezone="Europe/London",
+            identities=[
+                PlatformIdentity(platform="discord", platform_user_id="U_USER_001")
+            ],
+        )
+    )
+    fake_vertex_ai.set_text_response(
+        "projects/x/locations/us-central1/reasoningEngines/abc", "ok"
+    )
+    connector = FakePlatformConnector(platform="discord")
+    connector.set_user_info({"display_name": "Alice", "email": None})
+
+    await processor.process_platform_event(
+        event=_slack_event("hi", platform="discord", sent_at=SENT_AT),
+        connector=connector,
+        agent_id=seeded_agent,
+    )
+
+    sent_to_agent = fake_vertex_ai.messages_sent[0]["message"]
+    assert (
+        "[This message was sent at 7:30 PM on Tuesday, July 7, 2026 "
+        "in the Europe/London timezone, which is the user's default time zone.]"
+    ) in sent_to_agent
+
+
+async def test_non_slack_message_falls_back_to_settings_default_timezone(
+    processor, fake_vertex_ai, seeded_agent
+):
+    from tests.fakes.fake_platform_connector import FakePlatformConnector
+
+    fake_vertex_ai.set_text_response(
+        "projects/x/locations/us-central1/reasoningEngines/abc", "ok"
+    )
+    connector = FakePlatformConnector(platform="telegram")
+    connector.set_user_info({"display_name": "Bob", "email": None})
+
+    await processor.process_platform_event(
+        event=_slack_event("hi", platform="telegram", sent_at=SENT_AT),
+        connector=connector,
+        agent_id=seeded_agent,
+    )
+
+    # settings.default_user_timezone defaults to America/New_York
+    sent_to_agent = fake_vertex_ai.messages_sent[0]["message"]
+    assert (
+        "[This message was sent at 2:30 PM on Tuesday, July 7, 2026 "
+        "in the America/New_York timezone, which is the user's default time zone.]"
+    ) in sent_to_agent
 
 
 async def test_empty_agent_response_falls_back_to_apology(

@@ -1,0 +1,69 @@
+{% extends "admin/base.html" %}
+{% block title %}Edit user &middot; The Forum{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <a class="back-link" href="/admin/users">&larr; Users</a>
+  <h1>Edit "{{ user.primary_name }}"</h1>
+</header>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<form class="form-card" method="post" action="/admin/users/{{ user.id }}/edit">
+  <label class="field">
+    <span class="field-label">Primary name</span>
+    <input type="text" name="primary_name" required maxlength="100" value="{{ form.primary_name or user.primary_name }}">
+    <span class="field-hint">Shown to agents in the [From: &hellip;] message prefix.</span>
+  </label>
+
+  <label class="field">
+    <span class="field-label">Email</span>
+    <input type="email" name="email" maxlength="200" value="{{ form.email or (user.email or '') }}">
+    <span class="field-hint">Used to auto-link new platform identities (Google Chat reports the sender's email).</span>
+  </label>
+
+  <label class="field">
+    <span class="field-label">Default timezone</span>
+    {% set saved_tz = form.default_timezone or (user.default_timezone or '') %}
+    <select name="default_timezone">
+      <option value="" {% if not saved_tz %}selected{% endif %}>— Unset (use server default) —</option>
+      {% for tz in timezones %}<option value="{{ tz }}" {% if saved_tz == tz %}selected{% endif %}>{{ tz }}</option>{% endfor %}
+    </select>
+    <span class="field-hint">Used to tell agents the user's local send time on platforms that don't report a timezone (Discord, Google Chat, Telegram). Slack messages use the sender's live Slack profile timezone instead, and seed this field on their first Slack message if unset.</span>
+  </label>
+
+  <fieldset class="field">
+    <legend class="field-label">Linked identities</legend>
+    {% if user.identities %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Platform</th>
+          <th scope="col">Platform user ID</th>
+          <th scope="col">Display name</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for identity in user.identities %}
+        <tr>
+          <td><span class="chip chip-{{ identity.platform }}">{{ platform_labels.get(identity.platform, identity.platform) }}</span></td>
+          <td><code class="small">{{ identity.platform_user_id }}</code></td>
+          <td>{{ identity.display_name or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No linked identities.</p>
+    {% endif %}
+    <span class="field-hint">Read-only. Link or move identities with scripts/link_identities.py.</span>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Save changes</button>
+    <a class="btn" href="/admin/users">Cancel</a>
+  </div>
+</form>
+{% endblock %}

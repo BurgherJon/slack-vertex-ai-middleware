@@ -5,7 +5,9 @@
 import asyncio
 import base64
 import logging
+from datetime import datetime, UTC
 from typing import Optional, TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from app.config import get_settings
 from app.schemas.platform_event import PlatformEvent
@@ -83,6 +85,27 @@ ERR_TOOL_NO_RESPONSE_TEMPLATE = (
     "This often happens when it doesn't have permission to access an API. "
     "Could you let the person who created me know?"
 )
+
+
+def _localize(sent_at, tz_name: str) -> tuple[str, str]:
+    """
+    Render an aware UTC datetime as a human string in tz_name.
+
+    Returns (formatted string like "3:42 PM on Monday, July 7, 2026",
+    effective tz name). Falls back to UTC on an unknown zone name rather
+    than failing the message.
+    """
+    try:
+        local = sent_at.astimezone(ZoneInfo(tz_name))
+    except (KeyError, ValueError):  # ZoneInfoNotFoundError subclasses KeyError
+        logger.warning(f"Unknown timezone {tz_name!r}; falling back to UTC")
+        tz_name = "UTC"
+        local = sent_at.astimezone(ZoneInfo("UTC"))
+    time_str = local.strftime("%I:%M %p").lstrip("0")
+    return (
+        f"{time_str} on {local.strftime('%A, %B')} {local.day}, {local.year}",
+        tz_name,
+    )
 
 
 class MessageProcessorV2:
@@ -197,7 +220,11 @@ class MessageProcessorV2:
                 return
             # image_payload is None (no image) or a dict (single image ready).
 
-            message_text = f"[From: {user.primary_name}] {event.message_text}"
+            time_context = await self._build_time_context(event, user, user_info)
+            message_text = (
+                f"[From: {user.primary_name}] [{time_context}] "
+                f"{event.message_text}"
+            )
 
             if image_payload:
                 if "gcs_uri" in image_payload:
@@ -344,6 +371,46 @@ class MessageProcessorV2:
 
         except Exception as e:
             logger.exception(f"Unexpected error processing platform event: {e}")
+
+    async def _build_time_context(self, event, user, user_info: dict) -> str:
+        """
+        Build the "when was this sent" sentence injected into the agent prompt.
+
+        Slack reports the sender's profile timezone, so we use it directly
+        (and seed the user's default_timezone from it if unset). The other
+        platforms don't report one, so we localize to the user's default
+        timezone, falling back to settings.default_user_timezone.
+        """
+        sent_at = event.sent_at or datetime.now(UTC)
+
+        slack_tz = user_info.get("tz") if event.platform == "slack" else None
+        if slack_tz:
+            if not user.default_timezone and user.id:
+                # Seed so Discord/Telegram/Google Chat localize sensibly
+                # without manual setup. Never let this break the message.
+                try:
+                    await self.firestore.update_user(
+                        user.id, {"default_timezone": slack_tz}
+                    )
+                    user.default_timezone = slack_tz
+                    logger.info(
+                        f"Seeded default_timezone={slack_tz} for user {user.id} "
+                        f"from Slack profile"
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not seed default_timezone: {e}")
+            local, tz_name = _localize(sent_at, slack_tz)
+            return (
+                f"The user sent this message at {local} "
+                f"from the {tz_name} timezone."
+            )
+
+        tz = user.default_timezone or get_settings().default_user_timezone
+        local, tz_name = _localize(sent_at, tz)
+        return (
+            f"This message was sent at {local} in the {tz_name} timezone, "
+            f"which is the user's default time zone."
+        )
 
     async def _apply_file_rules(
         self,

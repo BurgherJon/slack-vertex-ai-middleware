@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 """Platform-agnostic event models for unified message processing."""
+from datetime import datetime
 from typing import Optional, Any
 from pydantic import BaseModel, Field
 
@@ -40,6 +41,15 @@ class PlatformEvent(BaseModel):
             "'mimetype' (str) and 'download_ref' (str, opaque reference the "
             "owning connector knows how to fetch). Connectors may include "
             "extra keys (size, name, etc.) for diagnostics."
+        )
+    )
+    sent_at: Optional[datetime] = Field(
+        default=None,
+        description=(
+            "When the user sent the message, as reported by the platform "
+            "(always timezone-aware UTC). None if the platform payload "
+            "carried no usable timestamp; the processor falls back to "
+            "receive time."
         )
     )
     media_group_id: Optional[str] = Field(

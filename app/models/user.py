@@ -51,6 +51,16 @@ class User(BaseModel):
         default=None,
         description="Email address for auto-linking (especially for Google Chat)"
     )
+    default_timezone: Optional[str] = Field(
+        default=None,
+        description=(
+            "IANA timezone name (e.g. 'America/New_York') used to localize "
+            "message timestamps for platforms that don't report the sender's "
+            "timezone (Discord, Google Chat, Telegram). Seeded from the "
+            "user's Slack profile on first Slack message; editable in the "
+            "admin UI. None falls back to settings.default_user_timezone."
+        )
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         description="When this user was created"

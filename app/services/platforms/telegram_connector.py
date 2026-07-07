@@ -4,6 +4,7 @@
 """Telegram platform connector implementation."""
 import logging
 import secrets
+from datetime import datetime, UTC
 from typing import Optional
 from fastapi import Request
 
@@ -403,6 +404,15 @@ class TelegramConnector(PlatformConnector):
         # processor even though each event has len(files) == 1.
         media_group_id = message.get("media_group_id")
 
+        # Telegram's `date` is unix epoch seconds (timezone-independent).
+        sent_at = None
+        date = message.get("date")
+        if date:
+            try:
+                sent_at = datetime.fromtimestamp(int(date), tz=UTC)
+            except (ValueError, TypeError, OSError):
+                logger.warning(f"Unparseable Telegram date: {date!r}")
+
         return PlatformEvent(
             platform="telegram",
             user_id=user_id,
@@ -410,6 +420,7 @@ class TelegramConnector(PlatformConnector):
             message_text=message_text,
             space_id=chat_id,
             files=files,
+            sent_at=sent_at,
             media_group_id=media_group_id,
             raw_event=data
         )

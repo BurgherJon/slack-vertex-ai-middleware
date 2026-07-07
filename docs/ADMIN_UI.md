@@ -17,6 +17,12 @@ only mounts when OAuth credentials are configured.
   GCP Console.
 - **Scheduled jobs** — list, create, edit, and delete the same scheduled
   jobs the API serves under `/api/v1/scheduled-jobs`.
+- **Users** — the unified user identities auto-created on first message,
+  with their linked platform identities. Edit a user's primary name, email
+  (used for auto-linking), and default timezone (used to localize message
+  send times for agents on platforms that don't report the sender's
+  timezone; Slack messages use the sender's live Slack profile timezone
+  instead). Identity linking itself stays in `scripts/link_identities.py`.
 
 The theme is the Roman Forum the project is named after: travertine
 backgrounds, oxblood accents, Cinzel display type. CSS lives in

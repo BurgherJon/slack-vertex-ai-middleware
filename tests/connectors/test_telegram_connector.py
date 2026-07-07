@@ -50,6 +50,15 @@ def test_parse_event_private_message():
     assert event.files == []
 
 
+def test_parse_event_extracts_sent_at_from_date():
+    from datetime import datetime, UTC
+
+    connector = _make_connector()
+    event = connector.parse_event(load_fixture("telegram/private_message.json"))
+    # Fixture date is 1234567890 (unix epoch seconds)
+    assert event.sent_at == datetime(2009, 2, 13, 23, 31, 30, tzinfo=UTC)
+
+
 def test_parse_event_photo_picks_largest_size():
     connector = _make_connector()
     event = connector.parse_event(load_fixture("telegram/photo_message.json"))

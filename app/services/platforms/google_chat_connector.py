@@ -5,6 +5,7 @@
 import logging
 import json
 import urllib.parse
+from datetime import datetime
 from typing import Optional
 from fastapi import Request
 
@@ -373,6 +374,20 @@ class GoogleChatConnector(PlatformConnector):
                     "source": "unknown",
                 })
 
+        # Google Chat's `createTime` is RFC 3339 in UTC,
+        # e.g. "2026-05-10T15:00:00.123456Z".
+        sent_at = None
+        create_time = message.get("createTime")
+        if create_time:
+            try:
+                sent_at = datetime.fromisoformat(
+                    create_time.replace("Z", "+00:00")
+                )
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Unparseable Google Chat createTime: {create_time!r}"
+                )
+
         return PlatformEvent(
             platform="google_chat",
             user_id=user_id,
@@ -380,5 +395,6 @@ class GoogleChatConnector(PlatformConnector):
             message_text=message_text,
             space_id=space_id,
             files=files,
+            sent_at=sent_at,
             raw_event=data
         )
