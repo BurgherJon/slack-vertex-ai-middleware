@@ -29,6 +29,10 @@ class FirestoreService:
         self.sessions_collection = settings.firestore_sessions_collection
         self.scheduled_jobs_collection = settings.firestore_scheduled_jobs_collection
         self.users_collection = "users"  # User identity collection
+        # Agent-to-agent conversation state (see app/api/v1/agents_mcp.py).
+        # Kept separate from `sessions` so A2A traffic never pollutes the
+        # user-session model or the admin UI's session views.
+        self.a2a_sessions_collection = "a2a_sessions"
         logger.info(f"Firestore client initialized for project: {settings.gcp_project_id}")
 
     async def get_agent_by_bot_id(self, bot_id: str) -> Optional[Agent]:
@@ -227,6 +231,64 @@ class FirestoreService:
         except Exception as e:
             logger.error(f"Error listing agents: {e}")
             return []
+
+    async def get_agent_by_display_name(self, display_name: str) -> Optional[Agent]:
+        """
+        Retrieve agent configuration by display name (case-insensitive).
+
+        Display names are the human-facing lookup key the deploy pipeline
+        (register_agent.py) upserts on, so they are unique in practice.
+
+        Args:
+            display_name: The agent's display name, e.g. "Mickey Marathon"
+
+        Returns:
+            Agent configuration if found, None otherwise
+        """
+        wanted = display_name.strip().lower()
+        if not wanted:
+            return None
+        for agent in await self.list_agents():
+            if agent.display_name.strip().lower() == wanted:
+                return agent
+        logger.warning(f"No agent found with display_name: {display_name}")
+        return None
+
+    async def get_a2a_session(self, session_key: str) -> Optional[str]:
+        """
+        Get the stored Vertex AI session ID for an agent-to-agent conversation.
+
+        Args:
+            session_key: Deterministic key for (caller agent, target agent,
+                on-behalf-of user) — see agents_mcp._a2a_session_key.
+
+        Returns:
+            The combined Vertex AI session ID if one exists, None otherwise.
+        """
+        try:
+            doc = await self.client.collection(self.a2a_sessions_collection).document(session_key).get()
+            if not doc.exists:
+                return None
+            return doc.to_dict().get("vertex_ai_session_id")
+        except Exception as e:
+            logger.error(f"Error fetching a2a session {session_key}: {e}")
+            return None
+
+    async def save_a2a_session(self, session_key: str, vertex_ai_session_id: str) -> None:
+        """
+        Persist the Vertex AI session ID for an agent-to-agent conversation.
+
+        Args:
+            session_key: Deterministic key for (caller, target, user).
+            vertex_ai_session_id: Combined session ID from VertexAIService.create_session.
+        """
+        try:
+            await self.client.collection(self.a2a_sessions_collection).document(session_key).set({
+                "vertex_ai_session_id": vertex_ai_session_id,
+                "updated_at": datetime.now(UTC),
+            })
+        except Exception as e:
+            logger.error(f"Error saving a2a session {session_key}: {e}")
 
     async def get_scheduled_job(self, job_id: str) -> Optional[ScheduledJob]:
         """

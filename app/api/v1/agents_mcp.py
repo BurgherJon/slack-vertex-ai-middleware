@@ -1,0 +1,393 @@
+# Copyright (C) 2025 Comites.ai
+# SPDX-License-Identifier: AGPL-3.0-only
+
+"""Agent-to-agent (A2A) MCP server (Streamable HTTP).
+
+Lets any agent attached to The Forum communicate with any other attached
+agent, with The Forum mediating the call. Three tools:
+
+  - list_agents:          who else is attached, and what they can be asked
+  - get_agent_inquiries:  the full inquiry records one agent publishes
+  - query_agent:          send a message to another agent and get its reply
+
+Agents publish their "inquiries" — the requests they know how to field —
+on their Firestore agent document (registered at deploy time by each agent
+repo's register_agent.py from an inquiries.json). See docs/FOR_AGENT_DEVELOPERS.md.
+
+Because agents serve multiple human users, every query_agent call must say
+who it is on behalf of. The target agent receives the message prefixed:
+
+    [From Agent: <caller display name> | On Behalf Of: <user primary name>] <message>
+
+and each (caller, target, user) triple gets its own persistent Vertex AI
+session, so different users' exchanges never share conversation history.
+
+Authentication mirrors the scheduler MCP: the agent presents its MCP API
+key (the same key provisioned by scripts/provision_scheduler_api_key.py)
+in the X-API-Key header; the SHA-256 hash identifies the calling agent.
+The caller's identity always comes from the key — an agent cannot
+impersonate another agent or omit attribution.
+
+Mounted as an ASGI app at /api/v1/mcp/agents. Stateless Streamable HTTP
+(one request = one tool call); the session manager's lifecycle is managed
+in the FastAPI app's lifespan in app/main.py. This server is also useful
+interactively: point an MCP client (e.g. Claude Code) at it with a valid
+agent key to explore and test attached agents during development.
+"""
+import asyncio
+import contextvars
+import json
+import logging
+from typing import Any, Optional
+
+from mcp.server.lowlevel import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.types import TextContent, Tool
+
+from app.api.v1.scheduler_mcp import hash_api_key
+from app.models.agent import Agent
+from app.services.firestore_service import FirestoreService
+from app.services.vertex_ai_service import VertexAIService
+
+logger = logging.getLogger(__name__)
+
+# How long query_agent waits for the target agent's reply. Reasoning-engine
+# turns with several tool calls can take a while; callers should treat a
+# timeout as "try again later", not as a missing feature on the target.
+QUERY_TIMEOUT_SECONDS = 120
+
+
+# ---------------------------------------------------------------------------
+# Per-request context (same pattern as scheduler_mcp)
+# ---------------------------------------------------------------------------
+_request_ctx: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "agents_mcp_request_ctx", default=None
+)
+
+
+def _ctx() -> dict:
+    ctx = _request_ctx.get()
+    if ctx is None:
+        raise RuntimeError("agents MCP tool called outside of an authenticated request")
+    return ctx
+
+
+def _caller() -> Agent:
+    return _ctx()["agent"]
+
+
+def _firestore() -> FirestoreService:
+    return _ctx()["firestore"]
+
+
+def _vertex_ai() -> VertexAIService:
+    return _ctx()["vertex_ai"]
+
+
+# ---------------------------------------------------------------------------
+# Tool definitions
+# ---------------------------------------------------------------------------
+_ON_BEHALF_OF_DESC = (
+    "The human user this query concerns, EXACTLY as their name appears in the "
+    "'[From: <name>] ...' prefix of the conversation you are working in (or the "
+    "'On Behalf Of' name if you were yourself queried by another agent). "
+    "Required: agents serve multiple users, and the target agent needs to know "
+    "whose data is being asked about. Do not guess or omit."
+)
+
+TOOLS: list[Tool] = [
+    Tool(
+        name="list_agents",
+        description=(
+            "List the other agents attached to this Forum: their display name, "
+            "what they do, and the names of the inquiries they can field. Use "
+            "get_agent_inquiries for full request/response formats."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="get_agent_inquiries",
+        description=(
+            "Get the full inquiry records one agent publishes: what you can "
+            "ping it about, how to phrase the request, and what response "
+            "format to expect."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "The agent's display name exactly as returned by list_agents.",
+                },
+            },
+            "required": ["agent_name"],
+        },
+    ),
+    Tool(
+        name="query_agent",
+        description=(
+            "Send a message to another agent attached to this Forum and get its "
+            "reply. The Forum delivers your message to the target agent with an "
+            "attribution prefix identifying you and who the query is on behalf "
+            "of. Conversation history is kept per (you, target agent, user), so "
+            "follow-up queries about the same user continue the same exchange. "
+            "Prefer the request_format from the target's published inquiries; "
+            "free-form messages are allowed but structured inquiries get "
+            "structured answers."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "The target agent's display name exactly as returned by list_agents.",
+                },
+                "message": {
+                    "type": "string",
+                    "description": (
+                        "The message to send. For published inquiries, use the "
+                        "inquiry's request_format (e.g. 'AGENT_QUERY: planned_workouts_today')."
+                    ),
+                },
+                "on_behalf_of": {
+                    "type": "string",
+                    "description": _ON_BEHALF_OF_DESC,
+                },
+            },
+            "required": ["agent_name", "message", "on_behalf_of"],
+        },
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# Tool handlers
+# ---------------------------------------------------------------------------
+def _inquiry_to_dict(inquiry) -> dict:
+    return {
+        "name": inquiry.name,
+        "description": inquiry.description,
+        "request_format": inquiry.request_format,
+        "response_format": inquiry.response_format,
+    }
+
+
+async def _resolve_target_agent(agent_name: Any) -> Agent:
+    if not isinstance(agent_name, str) or not agent_name.strip():
+        raise ValueError("agent_name is required. Use a display name from list_agents.")
+    target = await _firestore().get_agent_by_display_name(agent_name.strip())
+    if not target:
+        raise ValueError(
+            f"No agent found with name {agent_name!r}. Use the exact display "
+            f"name from list_agents."
+        )
+    return target
+
+
+async def _resolve_on_behalf_of_user(on_behalf_of: Any):
+    if not isinstance(on_behalf_of, str) or not on_behalf_of.strip():
+        raise ValueError(
+            "on_behalf_of is required: the name of the human user this query "
+            "concerns, from the '[From: <name>]' prefix of your conversation."
+        )
+    user = await _firestore().get_user_by_any_name(on_behalf_of.strip())
+    if not user:
+        raise ValueError(
+            f"No user found with name {on_behalf_of!r}. Pass the exact name "
+            f"from the '[From: <name>]' prefix — do not paraphrase."
+        )
+    return user
+
+
+def _a2a_session_key(caller_id: str, target_id: str, user_id: str) -> str:
+    return f"{caller_id}__{target_id}__{user_id}"
+
+
+async def _handle_list_agents(args: dict[str, Any]) -> str:
+    caller = _caller()
+    agents = await _firestore().list_agents()
+    result = [
+        {
+            "display_name": a.display_name,
+            "description": a.description,
+            "inquiries": [i.name for i in (a.inquiries or [])],
+        }
+        for a in agents
+        if a.id != caller.id
+    ]
+    return json.dumps(result)
+
+
+async def _handle_get_inquiries(args: dict[str, Any]) -> str:
+    target = await _resolve_target_agent(args.get("agent_name"))
+    return json.dumps({
+        "agent": target.display_name,
+        "description": target.description,
+        "inquiries": [_inquiry_to_dict(i) for i in (target.inquiries or [])],
+    })
+
+
+async def _handle_query_agent(args: dict[str, Any]) -> str:
+    caller = _caller()
+    target = await _resolve_target_agent(args.get("agent_name"))
+    if target.id == caller.id:
+        raise ValueError("You cannot query yourself. Use list_agents to find other agents.")
+
+    message = args.get("message")
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("message is required.")
+
+    user = await _resolve_on_behalf_of_user(args.get("on_behalf_of"))
+
+    firestore = _firestore()
+    vertex_ai = _vertex_ai()
+
+    # One persistent conversation per (caller, target, user) — different
+    # users' exchanges must never share history.
+    session_key = _a2a_session_key(caller.id, target.id, user.id)
+    session_id = await firestore.get_a2a_session(session_key)
+    if not session_id:
+        # The Vertex-session user id deliberately avoids ':' —
+        # VertexAIService.send_message splits the combined id on the first colon.
+        session_id = await vertex_ai.create_session(
+            target.vertex_ai_agent_id,
+            user_name=f"agent-{caller.id}-for-{user.id}",
+        )
+        await firestore.save_a2a_session(session_key, session_id)
+
+    prefixed = (
+        f"[From Agent: {caller.display_name} | On Behalf Of: {user.primary_name}] {message}"
+    )
+
+    try:
+        response = await asyncio.wait_for(
+            vertex_ai.send_message(
+                agent_id=target.vertex_ai_agent_id,
+                session_id=session_id,
+                message=prefixed,
+            ),
+            timeout=QUERY_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise ValueError(
+            f"{target.display_name} did not reply within {QUERY_TIMEOUT_SECONDS}s. "
+            f"Try again later."
+        )
+
+    reply = (response.text or "").strip()
+    if not reply:
+        raise ValueError(
+            f"{target.display_name} returned an empty reply "
+            f"({response.chunk_count} chunks). It may be misconfigured — "
+            f"try again or contact its operator."
+        )
+
+    return json.dumps({
+        "agent": target.display_name,
+        "on_behalf_of": user.primary_name,
+        "reply": reply,
+    })
+
+
+# ---------------------------------------------------------------------------
+# MCP Server registration
+# ---------------------------------------------------------------------------
+def _build_server() -> Server:
+    server: Server = Server("agents")
+
+    @server.list_tools()
+    async def _list_tools() -> list[Tool]:
+        return TOOLS
+
+    @server.call_tool()
+    async def _call_tool(name: str, arguments: Optional[dict[str, Any]]) -> list[TextContent]:
+        args = arguments or {}
+        try:
+            if name == "list_agents":
+                result = await _handle_list_agents(args)
+            elif name == "get_agent_inquiries":
+                result = await _handle_get_inquiries(args)
+            elif name == "query_agent":
+                result = await _handle_query_agent(args)
+            else:
+                raise ValueError(f"Unknown tool: {name}")
+            return [TextContent(type="text", text=result)]
+        except ValueError:
+            # Surface as a clean error response — MCP wraps raised exceptions as isError=True
+            raise
+        except Exception as e:
+            logger.exception(f"Error in agents MCP tool {name!r}: {e}")
+            raise
+
+    return server
+
+
+mcp_server = _build_server()
+session_manager = StreamableHTTPSessionManager(
+    mcp_server,
+    stateless=True,
+    json_response=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# ASGI entry point
+# ---------------------------------------------------------------------------
+async def _send_json(send, status: int, body: dict) -> None:
+    payload = json.dumps(body).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(payload)).encode("ascii")),
+        ],
+    })
+    await send({"type": "http.response.body", "body": payload})
+
+
+async def asgi_app(scope, receive, send) -> None:
+    """ASGI entry point: authenticate via X-API-Key, then delegate to MCP."""
+    if scope["type"] != "http":
+        await _send_json(send, 405, {"error": "Method not allowed"})
+        return
+
+    headers = {k: v for k, v in scope.get("headers", [])}
+    api_key_bytes = headers.get(b"x-api-key")
+    if not api_key_bytes:
+        await _send_json(send, 401, {"error": "Missing X-API-Key header"})
+        return
+
+    try:
+        api_key = api_key_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        await _send_json(send, 400, {"error": "Invalid X-API-Key encoding"})
+        return
+
+    state = scope.get("state", {})
+    firestore: Optional[FirestoreService] = state.get("firestore")
+    vertex_ai: Optional[VertexAIService] = state.get("vertex_ai")
+    if firestore is None or vertex_ai is None:
+        app = scope.get("app")
+        app_state = getattr(app, "state", None)
+        firestore = firestore or getattr(app_state, "firestore", None)
+        vertex_ai = vertex_ai or getattr(app_state, "vertex_ai", None)
+    if firestore is None or vertex_ai is None:
+        logger.error("agents MCP: FirestoreService/VertexAIService not available in ASGI scope")
+        await _send_json(send, 500, {"error": "Server misconfigured"})
+        return
+
+    agent = await firestore.get_agent_by_scheduler_api_key_hash(hash_api_key(api_key))
+    if not agent:
+        await _send_json(send, 401, {"error": "Invalid API key"})
+        return
+
+    token = _request_ctx.set({
+        "agent": agent,
+        "firestore": firestore,
+        "vertex_ai": vertex_ai,
+    })
+    try:
+        await session_manager.handle_request(scope, receive, send)
+    finally:
+        _request_ctx.reset(token)

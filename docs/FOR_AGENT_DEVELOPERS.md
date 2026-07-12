@@ -263,6 +263,94 @@ deprecated — same data, same behavior — if you have reason to call it
 directly (ops scripts, admin tools, etc.). For agents, prefer the MCP
 path above.
 
+### Agents MCP Server (agent-to-agent communication)
+
+The Forum hosts a second MCP server that lets any attached agent talk to
+any other attached agent, with the Forum mediating the call:
+
+```
+POST {forum_url}/api/v1/mcp/agents/       (Streamable HTTP, MCP spec 2025-03-26)
+```
+
+Same transport, same trailing-slash rule, and the **same API key** as the
+scheduler MCP (one key per agent authenticates both servers).
+
+#### Inquiries: publish what other agents can ping you about
+
+Each agent publishes **inquiries** — the requests it knows how to field
+from other agents — on its Firestore agent document. They're visible in
+the admin UI (agent detail page) and discoverable through this MCP
+server. Ship an `inquiries.json` in your agent repo:
+
+```json
+{
+  "description": "Marathon coach: training plans, workouts, Garmin data.",
+  "inquiries": [
+    {
+      "name": "planned_workouts_today",
+      "description": "Explains today's planned workout, its training purpose, energy demand, and estimated calorie burn.",
+      "request_format": "AGENT_QUERY: planned_workouts_today",
+      "response_format": "PLANNED_WORKOUTS <date>: <workout> | purpose=<...> | energy=<low|med|high> | est_calories=<n>"
+    }
+  ]
+}
+```
+
+and have your `register_agent.py` write `description` + `inquiries` to
+your agent's Firestore doc at deploy time (the Agent-Template's
+register_agent.py does this when `inquiries.json` is present). Keep the
+prompt sections that ANSWER each inquiry in sync with what you publish —
+the registry is a promise to other agents.
+
+#### Tools exposed
+
+| Tool | Inputs | Returns |
+|---|---|---|
+| `list_agents` | — | every other agent's `display_name`, `description`, inquiry names |
+| `get_agent_inquiries` | `agent_name` | the agent's full inquiry records |
+| `query_agent` | `agent_name`, `message`, `on_behalf_of` | `{agent, on_behalf_of, reply}` |
+
+#### The on-behalf-of contract
+
+Agents serve multiple human users, so **every `query_agent` call must
+say which user it concerns** (`on_behalf_of`, validated against the
+Forum's user registry). The target agent receives:
+
+```
+[From Agent: <caller display name> | On Behalf Of: <user primary name>] <message>
+```
+
+The caller's identity comes from the API key — an agent cannot
+impersonate another agent or omit attribution. Conversation history is
+kept per (caller, target, user), so different users' exchanges never
+share context.
+
+Prompt guidance for BOTH sides of an A2A exchange:
+
+- **When queried** (`[From Agent: ...]` prefix): answer in your published
+  `response_format`, scoped strictly to the On-Behalf-Of user's data. If
+  you don't serve that user, say so plainly instead of answering from
+  another user's data. Skip the conversational persona — the caller is
+  an LLM parsing your reply.
+- **When querying**: pass the user's name from your own `[From: <name>]`
+  prefix through as `on_behalf_of` verbatim. Prefer the target's
+  published `request_format`.
+
+#### Using it from Claude Code (development)
+
+The agents MCP server is also handy while *building* agents: attach
+Claude Code (or any MCP client) to it and you can list attached agents,
+read their inquiry contracts, and send test queries without touching a
+messaging platform:
+
+```bash
+claude mcp add --transport http forum-agents \
+  https://YOUR_FORUM_URL/api/v1/mcp/agents/ \
+  --header "X-API-Key: YOUR_AGENT_MCP_KEY"
+```
+
+Any provisioned agent key works; the caller identity will be that agent.
+
 ### GCS Image Storage (Forum-operator setup)
 
 When `GCS_BUCKET_NAME` is configured in the Forum's `.env`, the Forum

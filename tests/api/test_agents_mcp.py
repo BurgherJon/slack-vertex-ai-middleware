@@ -1,0 +1,220 @@
+# Copyright (C) 2025 Comites.ai
+# SPDX-License-Identifier: AGPL-3.0-only
+
+"""Agents (A2A) MCP tool-handler tests.
+
+Exercise the handlers directly by setting the per-request ContextVar (the
+ASGI layer normally sets it after authenticating the X-API-Key). Cover:
+listing excludes the caller, inquiry lookup, and query_agent's attribution
+prefix / per-(caller,target,user) session reuse / validation errors.
+"""
+import json
+
+import pytest
+
+from app.api.v1 import agents_mcp
+from app.models.agent import Agent, AgentInquiry
+from app.models.user import PlatformIdentity, User
+
+from tests.fakes.fake_vertex_ai import FakeVertexAIService
+
+
+CALLER_VERTEX_ID = "re-caller"
+TARGET_VERTEX_ID = "re-target"
+
+
+@pytest.fixture
+def caller(fake_firestore) -> Agent:
+    a = Agent(
+        vertex_ai_agent_id=CALLER_VERTEX_ID,
+        display_name="Nora the Nutritionist",
+        id="agent-nora",
+    )
+    fake_firestore.add_agent(a, agent_id="agent-nora")
+    return a
+
+
+@pytest.fixture
+def target(fake_firestore) -> Agent:
+    a = Agent(
+        vertex_ai_agent_id=TARGET_VERTEX_ID,
+        display_name="Mickey Marathon",
+        description="Marathon coach.",
+        inquiries=[
+            AgentInquiry(
+                name="planned_workouts_today",
+                description="Today's planned workout with purpose and estimated calories.",
+                request_format="AGENT_QUERY: planned_workouts_today",
+                response_format="PLANNED_WORKOUTS <date>: ...",
+            ),
+        ],
+        id="agent-mickey",
+    )
+    fake_firestore.add_agent(a, agent_id="agent-mickey")
+    return a
+
+
+@pytest.fixture
+def fake_vertex() -> FakeVertexAIService:
+    return FakeVertexAIService()
+
+
+@pytest.fixture
+def request_ctx(fake_firestore, fake_vertex, caller, target):
+    """Bind the authenticated request context the handlers read from."""
+    token = agents_mcp._request_ctx.set(
+        {"agent": caller, "firestore": fake_firestore, "vertex_ai": fake_vertex}
+    )
+    yield
+    agents_mcp._request_ctx.reset(token)
+
+
+async def _seed_user(fake_firestore) -> str:
+    return await fake_firestore.create_user(
+        User(
+            primary_name="Jonathan Cavell",
+            identities=[
+                PlatformIdentity(
+                    platform="discord", platform_user_id="D_001", display_name="jonathan"
+                )
+            ],
+        )
+    )
+
+
+# ---- list_agents ----
+
+
+async def test_list_agents_excludes_caller(fake_firestore, request_ctx):
+    listed = json.loads(await agents_mcp._handle_list_agents({}))
+    assert [a["display_name"] for a in listed] == ["Mickey Marathon"]
+    assert listed[0]["inquiries"] == ["planned_workouts_today"]
+
+
+# ---- get_agent_inquiries ----
+
+
+async def test_get_inquiries_returns_full_records(fake_firestore, request_ctx):
+    result = json.loads(
+        await agents_mcp._handle_get_inquiries({"agent_name": "Mickey Marathon"})
+    )
+    assert result["agent"] == "Mickey Marathon"
+    assert result["inquiries"][0]["request_format"] == "AGENT_QUERY: planned_workouts_today"
+
+
+async def test_get_inquiries_unknown_agent_raises(fake_firestore, request_ctx):
+    with pytest.raises(ValueError, match="No agent found"):
+        await agents_mcp._handle_get_inquiries({"agent_name": "Ghost"})
+
+
+async def test_get_inquiries_is_case_insensitive(fake_firestore, request_ctx):
+    result = json.loads(
+        await agents_mcp._handle_get_inquiries({"agent_name": "mickey marathon"})
+    )
+    assert result["agent"] == "Mickey Marathon"
+
+
+# ---- query_agent ----
+
+
+async def test_query_agent_prefixes_attribution(fake_firestore, fake_vertex, request_ctx):
+    await _seed_user(fake_firestore)
+    fake_vertex.set_text_response(TARGET_VERTEX_ID, "PLANNED_WORKOUTS 2026-07-12: rest day")
+
+    result = json.loads(
+        await agents_mcp._handle_query_agent({
+            "agent_name": "Mickey Marathon",
+            "message": "AGENT_QUERY: planned_workouts_today",
+            "on_behalf_of": "Jonathan Cavell",
+        })
+    )
+
+    assert result["reply"] == "PLANNED_WORKOUTS 2026-07-12: rest day"
+    assert result["on_behalf_of"] == "Jonathan Cavell"
+    sent = fake_vertex.messages_sent[-1]
+    assert sent["message"].startswith(
+        "[From Agent: Nora the Nutritionist | On Behalf Of: Jonathan Cavell] "
+    )
+    assert sent["agent_id"] == TARGET_VERTEX_ID
+
+
+async def test_query_agent_reuses_session_per_user(fake_firestore, fake_vertex, request_ctx):
+    await _seed_user(fake_firestore)
+    fake_vertex.set_text_response(TARGET_VERTEX_ID, "ok")
+
+    args = {
+        "agent_name": "Mickey Marathon",
+        "message": "hello",
+        "on_behalf_of": "Jonathan Cavell",
+    }
+    await agents_mcp._handle_query_agent(args)
+    await agents_mcp._handle_query_agent(args)
+
+    assert len(fake_vertex.sessions_created) == 1
+    assert (
+        fake_vertex.messages_sent[0]["session_id"]
+        == fake_vertex.messages_sent[1]["session_id"]
+    )
+
+
+async def test_query_agent_separate_sessions_per_user(fake_firestore, fake_vertex, request_ctx):
+    await _seed_user(fake_firestore)
+    await fake_firestore.create_user(User(primary_name="Nicole Cavell", identities=[]))
+    fake_vertex.set_text_response(TARGET_VERTEX_ID, "ok")
+
+    await agents_mcp._handle_query_agent({
+        "agent_name": "Mickey Marathon",
+        "message": "hello",
+        "on_behalf_of": "Jonathan Cavell",
+    })
+    await agents_mcp._handle_query_agent({
+        "agent_name": "Mickey Marathon",
+        "message": "hello",
+        "on_behalf_of": "Nicole Cavell",
+    })
+
+    assert len(fake_vertex.sessions_created) == 2
+    assert (
+        fake_vertex.messages_sent[0]["session_id"]
+        != fake_vertex.messages_sent[1]["session_id"]
+    )
+
+
+async def test_query_agent_requires_known_user(fake_firestore, request_ctx):
+    with pytest.raises(ValueError, match="No user found"):
+        await agents_mcp._handle_query_agent({
+            "agent_name": "Mickey Marathon",
+            "message": "hello",
+            "on_behalf_of": "Nobody",
+        })
+
+
+async def test_query_agent_requires_on_behalf_of(fake_firestore, request_ctx):
+    with pytest.raises(ValueError, match="on_behalf_of is required"):
+        await agents_mcp._handle_query_agent({
+            "agent_name": "Mickey Marathon",
+            "message": "hello",
+        })
+
+
+async def test_query_agent_rejects_self(fake_firestore, request_ctx):
+    await _seed_user(fake_firestore)
+    with pytest.raises(ValueError, match="cannot query yourself"):
+        await agents_mcp._handle_query_agent({
+            "agent_name": "Nora the Nutritionist",
+            "message": "hello",
+            "on_behalf_of": "Jonathan Cavell",
+        })
+
+
+async def test_query_agent_empty_reply_raises(fake_firestore, fake_vertex, request_ctx):
+    await _seed_user(fake_firestore)
+    from app.services.vertex_ai_service import VertexAIResponse
+    fake_vertex.set_response(TARGET_VERTEX_ID, VertexAIResponse(text="", chunk_count=0))
+
+    with pytest.raises(ValueError, match="empty reply"):
+        await agents_mcp._handle_query_agent({
+            "agent_name": "Mickey Marathon",
+            "message": "hello",
+            "on_behalf_of": "Jonathan Cavell",
+        })
