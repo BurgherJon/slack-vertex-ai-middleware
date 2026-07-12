@@ -155,14 +155,35 @@ maintaining wrapper functions.
 
 | Tool | Inputs | Returns |
 |---|---|---|
-| `create_scheduled_reminder` | `name`, `prompt`, `schedule` (cron), `user_id`, optional `timezone`, `output_platform` | the new job |
-| `list_scheduled_reminders` | `user_id` | array of jobs |
+| `create_scheduled_reminder` | `name`, `prompt`, `schedule` (cron), `user_name`, optional `timezone`, `output_platform` | the new job |
+| `list_scheduled_reminders` | `user_name` | array of jobs |
 | `update_scheduled_reminder` | `job_id`, optional `name`/`prompt`/`schedule`/`timezone`/`enabled` | updated job |
 | `delete_scheduled_reminder` | `job_id` | `{success, job_id}` |
+| `pause_scheduled_reminder` | `job_id` | job with `enabled=false` |
+| `resume_scheduled_reminder` | `job_id` | job with `enabled=true` |
 
-If you don't pass `output_platform` to `create_scheduled_reminder`, it
+`user_name` is the human name from the `[From: ...]` message prefix —
+the server resolves it to the unified user record. `output_platform` is
+one of `slack`, `google_chat`, `telegram`, `discord`; if omitted, it
 defaults to whichever platform the user most recently chatted with this
 agent on (falling back to `slack` if there's no session yet).
+
+Creates are idempotent per `(agent, user, name)`: re-creating a reminder
+with the same name updates it in place instead of duplicating it. This
+also means an agent can retarget a job's schedule from another job —
+e.g. a nightly job that re-creates a "morning check" reminder with a new
+time each night.
+
+#### Silent replies: `[SILENT]`
+
+When a scheduled job fires, the agent's reply is normally delivered to
+the user. If the agent's reply **starts with `[SILENT]`**, the run is
+recorded as a success but nothing is delivered. Use this for
+condition-check jobs ("if there's anything new, tell me — otherwise stay
+quiet"): instruct your agent, in the job's `prompt`, to reply `[SILENT]`
+when there is nothing worth saying. An *empty* reply is still treated as
+a failure (it usually means a broken tool), so `[SILENT]` is the only
+supported way to decline delivery.
 
 #### Provisioning your agent's API key
 

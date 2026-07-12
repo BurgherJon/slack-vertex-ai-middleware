@@ -128,7 +128,7 @@ TOOLS: list[Tool] = [
                 },
                 "output_platform": {
                     "type": "string",
-                    "enum": ["slack", "google_chat", "telegram"],
+                    "enum": ["slack", "google_chat", "telegram", "discord"],
                     "description": (
                         "Platform to deliver the reminder on. If omitted, defaults to "
                         "whichever platform the user most recently chatted with this "

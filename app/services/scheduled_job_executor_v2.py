@@ -19,6 +19,13 @@ from app.services.platforms.base import PlatformConnector
 
 logger = logging.getLogger(__name__)
 
+# An agent reply that starts with this sentinel means "the job ran fine but
+# there is nothing worth telling the user" (e.g. an hourly check that found
+# no new data). The execution is recorded as a success and NO message is
+# delivered. Without this, condition-check jobs would either spam the user
+# on every tick or return empty replies — which are treated as failures.
+SILENT_SENTINEL = "[SILENT]"
+
 
 class ScheduledJobExecutorV2:
     """Executes scheduled jobs with multi-platform support."""
@@ -146,7 +153,21 @@ class ScheduledJobExecutorV2:
                 message=prefixed_prompt,
             )
 
-            # Step 10: Only send if agent provided an actual response
+            # Step 10: A [SILENT]-prefixed reply means the job ran fine but has
+            # nothing to tell the user — record success, deliver nothing.
+            reply_text = (response.text or "").strip()
+            if reply_text.startswith(SILENT_SENTINEL):
+                await self.firestore.release_job_execution_lock(job_id, success=True)
+                if job.retry_at:
+                    await self.firestore.update_scheduled_job(job_id, {
+                        "retry_at": None,
+                        "retry_reason": None,
+                    })
+                    logger.info(f"Cleared retry for job {job_id} after successful silent execution")
+                logger.info(f"Job {job_id} executed silently (agent replied {SILENT_SENTINEL})")
+                return True
+
+            # Only send if agent provided an actual response
             if response.text and response.text.strip():
                 # Open conversation and send response
                 conversation_id = await connector.open_conversation(recipient_id)
@@ -446,6 +467,15 @@ class ScheduledJobExecutorV2:
                 session_id=session_id,
                 message=prefixed_prompt,
             )
+
+            # Honor the silent sentinel in test runs too, so a test of a
+            # condition-check job behaves like the real thing.
+            if (response.text or "").strip().startswith(SILENT_SENTINEL):
+                return {
+                    "success": True,
+                    "response": response.text,
+                    "message": f"Test execution completed silently ({SILENT_SENTINEL}), nothing delivered",
+                }
 
             # Send to platform
             conversation_id = await connector.open_conversation(recipient_id)
