@@ -234,8 +234,15 @@ class MessageProcessorV2:
                     )
                     message_text = f"{image_ref}\n\n{message_text}"
                     logger.info("Embedded 1 image reference in message")
-                # base64 path: handled implicitly — the agent receives the
-                # image via the same prompt structure already used today.
+                else:
+                    # Base64 fallback (no GCS configured). There is nowhere to
+                    # put the bytes: send_message() forwards only message /
+                    # user_id / session_id, so the encoded image is dropped
+                    # here. Configure GCS_BUCKET_NAME to forward images (#15).
+                    logger.warning(
+                        "Dropping inbound image: GCS is not configured, and "
+                        "the agent input carries no base64 channel"
+                    )
 
             if had_non_image_files:
                 message_text = f"{NOTE_NON_IMAGE_FILES_DROPPED}\n\n{message_text}"

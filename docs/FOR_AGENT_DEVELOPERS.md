@@ -42,37 +42,46 @@ Engine.
 
 ### Message structure
 
-**With GCS configured** (recommended; the default for Agent Engine):
+Your agent is invoked with exactly three keys. **There is no `images`
+parameter** — everything the agent needs, including any image reference,
+is carried inside the `message` string:
 
 ```python
 {
-    "message": "[From: Jonathan Cavell] What wine pairs with this?",
+    "message": "[IMAGE: gs://your-bucket/slack-files/20260328/a1b2c3d4e5f6.png | image/png]\n\n"
+               "[From: Jonathan Cavell] [This message was sent at ...] What wine pairs with this?",
     "user_id": "Jonathan Cavell",  # User's actual name from Firestore
     "session_id": "Jonathan Cavell:5695302693795397632",
-    "images": [
-        {
-            "gcs_uri": "gs://your-bucket/slack-files/20260328/a1b2c3d4e5f6.png",
-            "mime_type": "image/png",
-        }
-    ],
 }
 ```
 
-**Without GCS** (base64 fallback):
+`session_id` is omitted for old-style session IDs that carry no
+`user:session` split. Nothing else is sent.
 
-```python
-{
-    "message": "[From: Jonathan Cavell] What wine pairs with this?",
-    "user_id": "Jonathan Cavell",
-    "session_id": "Jonathan Cavell:5695302693795397632",
-    "images": [
-        {
-            "data": "iVBORw0KGgoAAAANSUhEUgAA...",  # base64-encoded
-            "mime_type": "image/png",
-        }
-    ],
-}
-```
+This is deliberate: passing a `gs://` URI as text keeps large images out
+of the request body, which is what keeps us inside Agent Engine's request
+size limits. Your agent fetches the object itself — see
+[Reading an inbound image](#reading-an-inbound-image).
+
+#### Anatomy of the `message` string
+
+Segments are prepended in this order, each separated by a blank line, and
+each is present only when it applies:
+
+| Order | Segment | When |
+|---|---|---|
+| 1 | `Note to Agent:  The user attempted to send you a file...` | A non-image attachment was dropped |
+| 2 | `[IMAGE: gs://… \| image/png]` | Exactly one image passed intake |
+| 3 | `[From: <name>] [<time context>] <user's text>` | Always |
+
+For scheduled jobs the prefix instead reads
+`[From: <name> | <platform>_id: <recipient>] <job prompt>`, and no image
+is ever attached.
+
+Parse defensively: match on the literal `[IMAGE: ` prefix and split on
+` | ` for the MIME type. Treat these as additive — new bracketed tokens
+may be introduced, and an agent that ignores tokens it doesn't recognise
+keeps working.
 
 ### User identity format
 
@@ -109,11 +118,37 @@ to your agent **before** invoking you:
   agent is **not** called.
 
 Your agent only ever sees: zero images plus text, or exactly one image
-referenced as `gcs_uri` (preferred) or `data` (base64 fallback).
+referenced by a `[IMAGE: gs://… | mime]` token in the `message` string.
 
-For ADK-side image handling (`types.Part.from_bytes`, multimodal model
-selection, `LlmAgent` subclassing), see Agent-Template's README — its
-`agent.py` already wires multimodal handling correctly.
+### Reading an inbound image
+
+The token gives you a `gs://` URI and a MIME type. Download the object
+and hand it to your model as an inline part — there is no base64 payload
+in the request to fall back on:
+
+```python
+from google.cloud import storage
+from google.genai import types
+
+def view_image(gcs_uri: str, mime_type: str) -> types.Part:
+    bucket_name, _, blob_name = gcs_uri.removeprefix("gs://").partition("/")
+    data = storage.Client().bucket(bucket_name).blob(blob_name).download_as_bytes()
+    return types.Part.from_bytes(data=data, mime_type=mime_type)
+```
+
+Two things to get right:
+
+- **Bucket access.** Your agent's runtime service account needs
+  `roles/storage.objectViewer` on The Forum's inbound-files bucket, or
+  the download 403s. Agents running as the default compute SA already
+  have it; per-agent service accounts must be granted it explicitly.
+- **Lifecycle.** Objects are deleted after `gcs_bucket_lifecycle_days`
+  (1 day in production). If your agent needs to keep a file, copy it out
+  **during the turn** — a `gs://` URI stored for later will 404.
+
+For ADK-side image handling (multimodal model selection, `LlmAgent`
+subclassing), see Agent-Template's README — its `agent.py` already wires
+multimodal handling correctly.
 
 ---
 
@@ -363,14 +398,20 @@ Any provisioned agent key works; the caller identity will be that agent.
 ### GCS Image Storage (Forum-operator setup)
 
 When `GCS_BUCKET_NAME` is configured in the Forum's `.env`, the Forum
-uploads inbound images to Google Cloud Storage and forwards a `gcs_uri`
-to your agent instead of base64. This is the recommended path for Agent
-Engine deployments — base64 inflates payload size and Agent Engine has
+uploads inbound images to Google Cloud Storage and passes the object's
+`gs://` URI to your agent in an `[IMAGE: …]` token. This keeps image
+bytes out of the request body, which matters because Agent Engine has
 relatively small request limits.
 
+**GCS is effectively required for image support.** The agent input
+carries no base64 channel, so with `GCS_BUCKET_NAME` unset an inbound
+image is accepted from the user and then dropped before the agent is
+called (logged as a warning). Configure the bucket if your agents need
+to see images at all.
+
 The setup below is for the **Forum operator**, not the agent developer.
-Your agent just needs to know that `gcs_uri` references auto-delete
-after 1 day, so don't store the URIs long-term in your agent's state.
+Your agent just needs to know that these objects auto-delete after 1 day,
+so don't store the URIs long-term in your agent's state.
 
 ```bash
 # Forum-operator setup (one-time)
