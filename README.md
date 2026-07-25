@@ -317,6 +317,7 @@ gcloud run services describe the-forum \
 | `FIRESTORE_AGENTS_COLLECTION` | No | Firestore collection name | `agents` (default) |
 | `FIRESTORE_SESSIONS_COLLECTION` | No | Firestore collection name | `sessions` (default) |
 | `SESSION_TIMEOUT_MINUTES` | No | Session expiry (minutes of inactivity) | `30` (default) |
+| `DEFAULT_USER_TIMEZONE` | No | Fallback IANA timezone for localizing message send times when a user has no `default_timezone` set | `America/New_York` (default) |
 | `ENVIRONMENT` | No | Environment name | `development` / `production` |
 | `LOG_LEVEL` | No | Logging level | `INFO` (default) |
 | `FIRESTORE_EMULATOR_HOST` | No (local only) | Firestore emulator address | `localhost:8681` |

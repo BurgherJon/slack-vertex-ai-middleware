@@ -6,6 +6,7 @@ import logging
 import hmac
 import hashlib
 import time
+from datetime import datetime, UTC
 from typing import Optional
 from fastapi import Request
 
@@ -197,6 +198,10 @@ class SlackConnector(PlatformConnector):
                 - display_name: User's display name
                 - real_name: User's real name
                 - email: Email (if available)
+                - tz: IANA timezone name from the user's Slack profile
+                  (e.g. "America/New_York", if available)
+                - tz_label: Human-readable timezone label
+                  (e.g. "Eastern Daylight Time", if available)
 
         Raises:
             SlackApiError: If Slack API call fails
@@ -209,7 +214,9 @@ class SlackConnector(PlatformConnector):
                 return {
                     "display_name": profile.get("display_name") or user.get("real_name") or user_id,
                     "real_name": user.get("real_name"),
-                    "email": profile.get("email")
+                    "email": profile.get("email"),
+                    "tz": user.get("tz"),
+                    "tz_label": user.get("tz_label"),
                 }
             else:
                 logger.error(f"Failed to get user info: {response}")
@@ -332,6 +339,16 @@ class SlackConnector(PlatformConnector):
                 "size": f.get("size"),
             })
 
+        # Slack's event `ts` is unix epoch seconds with a fractional part
+        # (it doubles as the message ID). Epoch is timezone-independent.
+        sent_at = None
+        ts = event_data.get("ts")
+        if ts:
+            try:
+                sent_at = datetime.fromtimestamp(float(ts), tz=UTC)
+            except (ValueError, TypeError, OSError):
+                logger.warning(f"Unparseable Slack ts: {ts!r}")
+
         return PlatformEvent(
             platform="slack",
             user_id=user_id,
@@ -339,5 +356,6 @@ class SlackConnector(PlatformConnector):
             message_text=message_text,
             space_id=channel_id,
             files=files,
+            sent_at=sent_at,
             raw_event=data
         )

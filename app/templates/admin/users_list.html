@@ -1,0 +1,52 @@
+{% extends "admin/base.html" %}
+{% block title %}Users &middot; The Forum{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div class="row-between">
+    <div>
+      <h1>Users</h1>
+      <p class="muted">Unified identities across platforms. Users are created automatically on their first message; identity linking is managed via scripts/link_identities.py.</p>
+    </div>
+  </div>
+</header>
+
+{% if not users %}
+<div class="empty-state">
+  <p>No users yet. A user record is created automatically the first time someone messages an agent.</p>
+</div>
+{% else %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th scope="col">Name</th>
+      <th scope="col">Email</th>
+      <th scope="col">Default timezone</th>
+      <th scope="col">Platforms</th>
+      <th scope="col">Created</th>
+      <th scope="col"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for user in users %}
+    <tr>
+      <td>{{ user.primary_name }}</td>
+      <td>{% if user.email %}{{ user.email }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if user.default_timezone %}{{ user.default_timezone }}{% else %}<span class="muted">unset</span>{% endif %}</td>
+      <td>
+        {% for identity in user.identities %}
+        <span class="chip chip-{{ identity.platform }}" title="{{ identity.platform_user_id }}">{{ platform_labels.get(identity.platform, identity.platform) }}</span>
+        {% endfor %}
+      </td>
+      <td>
+        {% if user.created_at %}<time datetime="{{ user.created_at.isoformat() }}">{{ user.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</time>{% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/admin/users/{{ user.id }}/edit">Edit</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

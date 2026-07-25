@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # A new Vertex AI session will be created after expiry
     session_timeout_minutes: int = 180  # 3 hours
 
+    # Fallback IANA timezone for localizing message timestamps when a user
+    # has no default_timezone set (and the platform doesn't report one).
+    # America/New_York (not the fixed-offset "EST") so DST is handled.
+    default_user_timezone: str = "America/New_York"
+
     # Slack (comma-separated list to support multiple Slack apps)
     slack_signing_secret: str
 

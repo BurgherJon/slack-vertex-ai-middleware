@@ -126,6 +126,23 @@ def test_parse_event_direct_message():
     assert event.message_text == "hi there"
 
 
+def test_parse_event_extracts_sent_at_from_ts():
+    from datetime import datetime, UTC
+
+    connector = _make_connector()
+    event = connector.parse_event(load_fixture("slack/direct_message.json"))
+    # Fixture ts is "1234567890.000200" (unix epoch seconds)
+    assert event.sent_at == datetime.fromtimestamp(1234567890.0002, tz=UTC)
+
+
+def test_parse_event_missing_ts_yields_no_sent_at():
+    connector = _make_connector()
+    event = connector.parse_event(
+        {"event": {"user": "U_1", "channel": "C_1", "text": "hi"}}
+    )
+    assert event.sent_at is None
+
+
 def test_parse_event_file_share_normalises_attachment():
     connector = _make_connector()
     event = connector.parse_event(load_fixture("slack/file_share.json"))

@@ -52,6 +52,17 @@ def test_parse_event_dm_text():
     assert event.files == []
 
 
+def test_parse_event_derives_sent_at_from_snowflake():
+    from datetime import datetime, UTC
+
+    connector = _make_connector()
+    event = connector.parse_event(load_fixture("discord/dm_text.json"))
+    # Fixture message_id 777888999000111222 decodes to this creation time
+    assert event.sent_at == datetime(
+        2020, 11, 16, 13, 33, 9, 840000, tzinfo=UTC
+    )
+
+
 def test_parse_event_dm_with_attachment():
     connector = _make_connector()
     event = connector.parse_event(load_fixture("discord/dm_with_attachment.json"))
@@ -79,3 +90,5 @@ def test_parse_event_skips_attachment_without_url():
         "attachments": [{"filename": "no-url.png"}],
     })
     assert event.files == []
+    # No message_id in this payload → no derivable timestamp
+    assert event.sent_at is None

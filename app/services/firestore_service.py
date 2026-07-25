@@ -820,6 +820,32 @@ class FirestoreService:
             logger.error(f"Error listing users: {e}")
             return []
 
+    async def update_user(self, user_id: str, fields: dict) -> None:
+        """
+        Update top-level fields on a user document.
+
+        Used by the admin UI (primary_name, email, default_timezone) and by
+        the message processor to seed default_timezone from a Slack profile.
+        Does not touch the identities array — use add_user_identity for that.
+
+        Args:
+            user_id: User document ID
+            fields: Field names and new values to set
+
+        Raises:
+            Exception: If update fails
+        """
+        try:
+            doc_ref = self.client.collection(self.users_collection).document(user_id)
+            await doc_ref.update({
+                **fields,
+                "updated_at": datetime.now(UTC),
+            })
+            logger.info(f"Updated user {user_id}: {sorted(fields.keys())}")
+        except Exception as e:
+            logger.error(f"Error updating user {user_id}: {e}")
+            raise
+
     async def add_user_identity(
         self, user_id: str, identity: PlatformIdentity
     ) -> None:
