@@ -9,9 +9,10 @@ from typing import List, Optional
 from google.cloud.firestore import AsyncClient, FieldFilter, ArrayUnion
 
 from app.config import get_settings
+from app.core.exceptions import DuplicateScheduledJobError, ScheduledJobReadError
 from app.models.agent import Agent
 from app.models.session import Session
-from app.models.scheduled_job import ScheduledJob
+from app.models.scheduled_job import ScheduledJob, job_identity_key
 from app.models.user import User, PlatformIdentity
 from app.utils.datetime_helpers import to_aware_utc
 
@@ -334,10 +335,32 @@ class FirestoreService:
         Raises:
             Exception: If creation fails
         """
+        identity = job_identity_key(
+            job_data.get("agent_id"), job_data.get("user_id"), job_data.get("name")
+        )
+
+        # Write-time uniqueness guard. This runs a plain equality query and
+        # inspects only document ids — it never deserializes a candidate into
+        # ScheduledJob — so it still holds when a malformed document would
+        # defeat the model-level lookup in _find_existing_job (#14).
+        if identity:
+            existing_ids = [
+                doc.id
+                async for doc in self.client.collection(self.scheduled_jobs_collection)
+                .where(filter=FieldFilter("identity_key", "==", identity))
+                .stream()
+            ]
+            if existing_ids:
+                raise DuplicateScheduledJobError(
+                    f"Scheduled job with identity {identity} already exists "
+                    f"(document {existing_ids[0]}); refusing to insert a duplicate"
+                )
+
         try:
             now = datetime.now(UTC)
             job_data["created_at"] = now
             job_data["updated_at"] = now
+            job_data["identity_key"] = identity
 
             doc_ref = self.client.collection(self.scheduled_jobs_collection).document()
             await doc_ref.set(job_data)
@@ -366,6 +389,16 @@ class FirestoreService:
         """
         try:
             updates["updated_at"] = datetime.now(UTC)
+
+            # Keep identity_key in step with the name, or a rename would leave
+            # the uniqueness guard matching on the job's old name — blocking a
+            # legitimate re-create of that name and missing real duplicates.
+            if "name" in updates:
+                current = await self.get_scheduled_job(job_id)
+                if current:
+                    updates["identity_key"] = job_identity_key(
+                        current.agent_id, current.user_id, updates["name"]
+                    )
 
             await self.client.collection(self.scheduled_jobs_collection).document(job_id).update(updates)
 
@@ -399,43 +432,78 @@ class FirestoreService:
         agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
         enabled_only: bool = False,
+        strict: bool = False,
     ) -> List[ScheduledJob]:
         """
         List scheduled jobs with optional filters.
+
+        Failure handling is deliberately asymmetric, because the two callers
+        need opposite behavior when a stored document won't parse (#14):
+
+        * The dispatcher (get_due_jobs) must keep going — one bad document
+          must not stop every other agent's jobs from running. It gets the
+          default, skip-and-log behavior.
+        * The upsert lookup (_find_existing_job) decides whether to *write*.
+          A silently short result there means a duplicate insert, so it passes
+          strict=True and gets an exception instead of a partial list.
+
+        Query-level failures always raise. This function must never report an
+        unreadable collection as an empty one.
 
         Args:
             agent_id: Filter by agent ID
             user_id: Filter by user ID
             enabled_only: Only return enabled jobs
+            strict: Raise ScheduledJobReadError if any document fails to parse,
+                rather than skipping it
 
         Returns:
             List of ScheduledJob objects
+
+        Raises:
+            ScheduledJobReadError: If strict and a document cannot be parsed
+            Exception: If the underlying Firestore query fails
         """
-        try:
-            query = self.client.collection(self.scheduled_jobs_collection)
+        query = self.client.collection(self.scheduled_jobs_collection)
 
-            if agent_id:
-                query = query.where("agent_id", "==", agent_id)
-            if user_id:
-                query = query.where("user_id", "==", user_id)
-            if enabled_only:
-                query = query.where("enabled", "==", True)
+        if agent_id:
+            query = query.where("agent_id", "==", agent_id)
+        if user_id:
+            query = query.where("user_id", "==", user_id)
+        if enabled_only:
+            query = query.where("enabled", "==", True)
 
-            jobs = []
-            async for doc in query.stream():
+        jobs = []
+        skipped = []
+        async for doc in query.stream():
+            # Per-document, so one unparseable document costs exactly one job
+            # instead of blanking the entire result set.
+            try:
                 data = doc.to_dict()
                 # Handle Firestore timestamps
                 for field in ["last_execution_at", "execution_started_at", "created_at", "updated_at"]:
                     if field in data:
                         data[field] = to_aware_utc(data[field])
                 jobs.append(ScheduledJob(**data, id=doc.id))
+            except Exception as e:
+                skipped.append(doc.id)
+                logger.error(
+                    f"Skipping unparseable scheduled job document {doc.id}: {e}"
+                )
+                if strict:
+                    raise ScheduledJobReadError(
+                        f"Scheduled job document {doc.id} could not be parsed; "
+                        f"refusing to report a partial job list"
+                    ) from e
 
+        if skipped:
+            logger.error(
+                f"Listed {len(jobs)} scheduled jobs; skipped {len(skipped)} "
+                f"unparseable document(s): {', '.join(skipped)}"
+            )
+        else:
             logger.info(f"Listed {len(jobs)} scheduled jobs")
-            return jobs
-
-        except Exception as e:
-            logger.error(f"Error listing scheduled jobs: {e}")
-            return []
+        return jobs
 
     async def acquire_job_execution_lock(
         self,

@@ -12,6 +12,7 @@ from google.oauth2 import id_token
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.core.exceptions import DuplicateScheduledJobError, ScheduledJobReadError
 from app.schemas.scheduled_job import (
     ExecuteJobRequest,
     ExecuteJobResponse,
@@ -112,6 +113,20 @@ async def create_scheduled_job(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except DuplicateScheduledJobError as e:
+        # The write-time guard rejected an insert that would duplicate an
+        # existing job. Surfaced as a conflict so the caller can update the
+        # existing job instead of retrying the create.
+        logger.warning(f"Rejected duplicate scheduled job: {e}")
+        raise HTTPException(status_code=409, detail=str(e))
+    except ScheduledJobReadError as e:
+        # Fail closed: existing jobs could not be listed, so we cannot tell
+        # whether this create would duplicate one.
+        logger.error(f"Refusing to create scheduled job, read incomplete: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Could not verify existing jobs; create refused to avoid a duplicate",
+        )
     except Exception as e:
         logger.exception(f"Error creating scheduled job: {e}")
         raise HTTPException(status_code=500, detail="Failed to create scheduled job")
@@ -130,7 +145,14 @@ async def list_scheduled_jobs(
         agent_id: Filter by agent ID
         user_id: Filter by user ID
     """
-    jobs = await service.list_jobs(agent_id=agent_id, user_id=user_id)
+    try:
+        jobs = await service.list_jobs(agent_id=agent_id, user_id=user_id)
+    except Exception as e:
+        # Previously a failed read surfaced as an empty list, which reads as
+        # "this user has no jobs" (#14). Report the failure instead.
+        logger.exception(f"Error listing scheduled jobs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list scheduled jobs")
+
     return ScheduledJobListResponse(
         jobs=[
             ScheduledJobResponse(
@@ -302,8 +324,13 @@ async def process_due_jobs(
     if not await verify_cloud_scheduler_token(request):
         raise HTTPException(status_code=401, detail="Invalid authorization")
 
-    # Get all due jobs
-    due_jobs = await service.get_due_jobs()
+    # Get all due jobs. A read failure here must not be reported as "nothing
+    # due" — that silently skips every scheduled job for the tick.
+    try:
+        due_jobs = await service.get_due_jobs()
+    except Exception as e:
+        logger.exception(f"Error determining due jobs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to determine due jobs")
 
     if not due_jobs:
         logger.info("No jobs due to process")
