@@ -11,9 +11,10 @@ from datetime import datetime, timedelta, UTC
 from typing import List, Optional
 import uuid
 
+from app.core.exceptions import DuplicateScheduledJobError, ScheduledJobReadError
 from app.models.agent import Agent
 from app.models.session import Session
-from app.models.scheduled_job import ScheduledJob
+from app.models.scheduled_job import ScheduledJob, job_identity_key
 from app.models.user import User, PlatformIdentity
 
 
@@ -27,6 +28,9 @@ class FakeFirestoreService:
         self.scheduled_jobs: dict[str, dict] = {}
         self.users: dict[str, dict] = {}
         self.a2a_sessions: dict[str, str] = {}
+        # Set by tests to simulate a Firestore query failure (permissions,
+        # transient error, missing index) on the scheduled_jobs collection.
+        self.scheduled_jobs_query_error: Optional[Exception] = None
 
     # ---- Test setup helpers (not on the real interface) ----
 
@@ -184,11 +188,32 @@ class FakeFirestoreService:
         return ScheduledJob(**data, id=job_id)
 
     async def create_scheduled_job(self, job_data: dict) -> ScheduledJob:
+        identity = job_identity_key(
+            job_data.get("agent_id"), job_data.get("user_id"), job_data.get("name")
+        )
+        # Mirrors the real write-time guard: an equality scan over stored
+        # identity_key values that never parses candidate documents.
+        if identity:
+            clash = next(
+                (
+                    jid
+                    for jid, data in self.scheduled_jobs.items()
+                    if data.get("identity_key") == identity
+                ),
+                None,
+            )
+            if clash:
+                raise DuplicateScheduledJobError(
+                    f"Scheduled job with identity {identity} already exists "
+                    f"(document {clash}); refusing to insert a duplicate"
+                )
+
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         now = datetime.now(UTC)
         data = dict(job_data)
         data["created_at"] = now
         data["updated_at"] = now
+        data["identity_key"] = identity
         self.scheduled_jobs[job_id] = data
         return ScheduledJob(**data, id=job_id)
 
@@ -197,6 +222,12 @@ class FakeFirestoreService:
     ) -> Optional[ScheduledJob]:
         if job_id not in self.scheduled_jobs:
             return None
+        updates = dict(updates)
+        if "name" in updates:
+            current = self.scheduled_jobs[job_id]
+            updates["identity_key"] = job_identity_key(
+                current.get("agent_id"), current.get("user_id"), updates["name"]
+            )
         self.scheduled_jobs[job_id].update(updates)
         self.scheduled_jobs[job_id]["updated_at"] = datetime.now(UTC)
         return await self.get_scheduled_job(job_id)
@@ -209,7 +240,11 @@ class FakeFirestoreService:
         agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
         enabled_only: bool = False,
+        strict: bool = False,
     ) -> List[ScheduledJob]:
+        if self.scheduled_jobs_query_error is not None:
+            raise self.scheduled_jobs_query_error
+
         results = []
         for jid, data in self.scheduled_jobs.items():
             if agent_id is not None and data.get("agent_id") != agent_id:
@@ -218,7 +253,15 @@ class FakeFirestoreService:
                 continue
             if enabled_only and not data.get("enabled", True):
                 continue
-            results.append(ScheduledJob(**data, id=jid))
+            try:
+                results.append(ScheduledJob(**data, id=jid))
+            except Exception as e:
+                if strict:
+                    raise ScheduledJobReadError(
+                        f"Scheduled job document {jid} could not be parsed; "
+                        f"refusing to report a partial job list"
+                    ) from e
+                continue
         return results
 
     async def acquire_job_execution_lock(

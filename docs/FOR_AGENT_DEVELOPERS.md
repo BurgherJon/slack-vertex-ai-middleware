@@ -174,6 +174,15 @@ also means an agent can retarget a job's schedule from another job —
 e.g. a nightly job that re-creates a "morning check" reminder with a new
 time each night.
 
+`create_scheduled_reminder` **fails closed**. If the Forum cannot read
+your existing reminders in full — a Firestore error, or a stored job
+document that won't parse — the create returns an error instead of
+inserting. Treat that error as retryable and do *not* fall back to
+creating under a different name: the point is that an unreadable list
+must never be mistaken for an empty one, which is how one agent
+accumulated 37 reminders where 7 were intended. A create that would
+duplicate an existing job is likewise rejected outright.
+
 #### Silent replies: `[SILENT]`
 
 When a scheduled job fires, the agent's reply is normally delivered to

@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 """ScheduledJobService tests against the fake firestore."""
+from datetime import datetime, timedelta, UTC
+
 import pytest
 
+from app.core.exceptions import DuplicateScheduledJobError, ScheduledJobReadError
 from app.models.agent import Agent
 from app.schemas.scheduled_job import ScheduledJobCreate, ScheduledJobUpdate
 from app.services.scheduled_job_service import ScheduledJobService
@@ -144,6 +147,205 @@ async def test_upsert_scopes_identity_by_user_and_agent(service, agent_id_in_fir
     await service.create_job(_make_create(name="check-in", user_id="user-2"))
     assert len(await service.list_jobs(user_id="user-1")) == 1
     assert len(await service.list_jobs(user_id="user-2")) == 1
+
+
+# ---- read failures must not defeat the upsert (#14) ----
+
+
+def _poison_doc(**overrides) -> dict:
+    """
+    A stored document that ScheduledJob cannot parse.
+
+    Uses a null prompt rather than a null name: name is now coerced (see
+    test_null_name_document_does_not_hide_sibling_jobs), so prompt is what
+    still produces the ValidationError this bug hinged on.
+    """
+    data = dict(
+        name="poison",
+        prompt=None,
+        agent_id="agent-1",
+        user_id="user-1",
+        schedule="0 3 * * *",
+        enabled=True,
+    )
+    data.update(overrides)
+    return data
+
+
+async def test_null_name_document_does_not_hide_sibling_jobs(
+    service, fake_firestore, agent_id_in_firestore
+):
+    """The original incident: one name:null doc blanked the whole list."""
+    existing = await service.create_job(_make_create(name="morning-readiness-check"))
+    fake_firestore.scheduled_jobs["poison"] = {
+        "name": None,
+        "prompt": "whatever",
+        "agent_id": "agent-1",
+        "user_id": "user-1",
+        "schedule": "0 3 * * *",
+        "enabled": True,
+    }
+
+    # The re-create must still find the existing job and update it in place.
+    again = await service.create_job(
+        _make_create(name="morning-readiness-check", prompt="updated")
+    )
+
+    assert again.id == existing.id, "upsert inserted a duplicate instead of updating"
+    real_jobs = [
+        j
+        for j in await service.list_jobs(agent_id="agent-1", user_id="user-1")
+        if j.id != "poison"
+    ]
+    assert len(real_jobs) == 1
+
+
+async def test_nameless_document_never_matches_an_upsert_target(
+    service, fake_firestore, agent_id_in_firestore
+):
+    """A coerced empty name must not become a wildcard that swallows creates."""
+    fake_firestore.scheduled_jobs["nameless"] = {
+        "name": None,
+        "prompt": "whatever",
+        "agent_id": "agent-1",
+        "user_id": "user-1",
+        "schedule": "0 3 * * *",
+        "enabled": True,
+    }
+
+    created = await service.create_job(_make_create(name="a real job"))
+
+    assert created.id != "nameless"
+
+
+async def test_create_fails_closed_when_a_document_cannot_be_parsed(
+    service, fake_firestore, agent_id_in_firestore
+):
+    """
+    An unparseable doc must not read as "no existing job".
+
+    Skipping it silently is exactly how a duplicate gets inserted, so the
+    upsert lookup refuses to answer from a partial list.
+    """
+    fake_firestore.scheduled_jobs["poison"] = _poison_doc()
+
+    with pytest.raises(ScheduledJobReadError):
+        await service.create_job(_make_create(name="morning brief"))
+
+    # Nothing was written.
+    assert set(fake_firestore.scheduled_jobs) == {"poison"}
+
+
+async def test_create_fails_closed_when_the_query_fails(
+    service, fake_firestore, agent_id_in_firestore
+):
+    """Permissions/transient/index failures must not read as an empty collection."""
+    fake_firestore.scheduled_jobs_query_error = RuntimeError("firestore unavailable")
+
+    with pytest.raises(RuntimeError, match="firestore unavailable"):
+        await service.create_job(_make_create())
+
+    assert fake_firestore.scheduled_jobs == {}
+
+
+async def test_dispatcher_still_runs_other_jobs_despite_a_bad_document(
+    service, fake_firestore, agent_id_in_firestore
+):
+    """
+    The dispatcher takes the opposite trade-off from the upsert lookup.
+
+    One unparseable document must not stop every other agent's jobs; it is
+    skipped and logged rather than raising.
+    """
+    healthy = await service.create_job(
+        _make_create(name="healthy", schedule="* * * * *")
+    )
+    # Backdate the last run so the cron is actually due this tick.
+    fake_firestore.scheduled_jobs[healthy.id]["last_execution_at"] = datetime.now(
+        UTC
+    ) - timedelta(days=1)
+    fake_firestore.scheduled_jobs["poison"] = _poison_doc()
+
+    due = await service.get_due_jobs()
+
+    assert [j.name for j in due] == ["healthy"]
+
+
+async def test_blank_name_is_rejected(service, agent_id_in_firestore):
+    """Whitespace passes the schema's min_length but has no dedup identity."""
+    with pytest.raises(ValueError, match="blank"):
+        await service.create_job(_make_create(name="   "))
+
+
+# ---- write-time uniqueness guard ----
+
+
+async def test_write_guard_blocks_a_duplicate_the_lookup_missed(
+    service, fake_firestore, agent_id_in_firestore
+):
+    """
+    Last line of defense: even if the lookup wrongly reports no match, the
+    insert itself is refused. Simulated by bypassing the lookup entirely.
+    """
+    await service.create_job(_make_create(name="nightly"))
+
+    with pytest.raises(DuplicateScheduledJobError):
+        await fake_firestore.create_scheduled_job(
+            {
+                "name": "nightly",
+                "prompt": "dupe",
+                "agent_id": "agent-1",
+                "user_id": "user-1",
+                "schedule": "0 3 * * *",
+                "enabled": True,
+            }
+        )
+
+
+async def test_write_guard_matches_normalized_names(
+    service, fake_firestore, agent_id_in_firestore
+):
+    await service.create_job(_make_create(name="Nightly Sync"))
+
+    with pytest.raises(DuplicateScheduledJobError):
+        await fake_firestore.create_scheduled_job(
+            {
+                "name": "  nightly sync  ",
+                "prompt": "dupe",
+                "agent_id": "agent-1",
+                "user_id": "user-1",
+                "schedule": "0 3 * * *",
+                "enabled": True,
+            }
+        )
+
+
+async def test_write_guard_scopes_identity_by_user(
+    service, fake_firestore, agent_id_in_firestore
+):
+    await service.create_job(_make_create(name="check-in", user_id="user-1"))
+    # Same name, different user — not a duplicate.
+    other = await service.create_job(_make_create(name="check-in", user_id="user-2"))
+    assert other.id is not None
+
+
+async def test_rename_moves_the_identity_so_the_old_name_is_free(
+    service, agent_id_in_firestore
+):
+    """
+    A stale identity_key would both block a legitimate re-create of the old
+    name and stop matching real duplicates of the new one.
+    """
+    job = await service.create_job(_make_create(name="old name"))
+    await service.update_job(job.id, ScheduledJobUpdate(name="new name"))
+
+    # Old name is free again...
+    recreated = await service.create_job(_make_create(name="old name"))
+    assert recreated.id != job.id
+
+    # ...and the new name now dedups against the renamed job.
+    again = await service.create_job(_make_create(name="new name"))
+    assert again.id == job.id
 
 
 async def test_cron_error_message_is_actionable(service, agent_id_in_firestore):

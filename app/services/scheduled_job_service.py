@@ -10,7 +10,7 @@ import pytz
 from croniter import croniter
 
 from app.config import get_settings
-from app.models.scheduled_job import ScheduledJob
+from app.models.scheduled_job import ScheduledJob, normalize_job_name
 from app.schemas.scheduled_job import ScheduledJobCreate, ScheduledJobUpdate
 from app.services.firestore_service import FirestoreService
 
@@ -155,7 +155,7 @@ class ScheduledJobService:
     @staticmethod
     def _normalize_name(name: str) -> str:
         """Identity key used for upsert dedup: trimmed + case-folded."""
-        return name.strip().casefold()
+        return normalize_job_name(name)
 
     async def _find_existing_job(
         self, agent_id: str, user_id: str, name: str
@@ -166,13 +166,26 @@ class ScheduledJobService:
         Name match is normalized (trimmed, case-insensitive) so trivially
         different casing/whitespace doesn't create a duplicate. Volume per
         (agent, user) is tiny, so an in-memory scan of their jobs is fine.
+
+        Reads strictly: the caller uses the answer to decide whether to
+        insert, so "could not list jobs" must not arrive here disguised as
+        "no job matched". Any read problem propagates and create_job fails
+        closed rather than risking a duplicate (#14).
+
+        Raises:
+            ScheduledJobReadError: If the job list could not be read in full
         """
-        target = self._normalize_name(name)
+        target = normalize_job_name(name)
+        if not target:
+            # A blank target has no identity; it must not match the ""
+            # normalized name of a malformed document.
+            return None
+
         jobs = await self.firestore.list_scheduled_jobs(
-            agent_id=agent_id, user_id=user_id
+            agent_id=agent_id, user_id=user_id, strict=True
         )
         for job in jobs:
-            if self._normalize_name(job.name) == target:
+            if normalize_job_name(job.name) == target:
                 return job
         return None
 
@@ -190,15 +203,29 @@ class ScheduledJobService:
         Args:
             job_data: Job creation data
 
+        Fails closed: if the existing-job lookup cannot be completed, this
+        raises rather than falling through to an insert. A duplicate reminder
+        firing on its own schedule is worse than a create that errors and can
+        be retried (#14).
+
         Returns:
             The created or updated ScheduledJob
 
         Raises:
             ValueError: If validation fails
+            ScheduledJobReadError: If existing jobs could not be listed
+            DuplicateScheduledJobError: If the write-time guard finds a job
+                with the same identity
         """
         # Validate cron expression
         if not self._validate_cron_expression(job_data.schedule):
             raise ValueError(self._cron_error_message(job_data.schedule))
+
+        # A blank name normalizes to "" and would have no dedup identity, so
+        # every call would insert another copy. min_length=1 on the schema
+        # still admits all-whitespace, so reject it here.
+        if not normalize_job_name(job_data.name):
+            raise ValueError("Job name cannot be blank")
 
         # Validate timezone
         try:
