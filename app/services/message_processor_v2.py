@@ -35,8 +35,19 @@ REJECTION_NON_IMAGE_FILES = (
     "I can only accept typed words and images. "
     "I'm going to ignore those files and read the rest of your message."
 )
+# Used when the agent has declared a capability beyond plain images, so the
+# generic copy above would understate what it can actually read.
+REJECTION_UNREADABLE_FILES_TEMPLATE = (
+    "Sorry, it appears you sent me a file type that I can't read! "
+    "I can accept typed words, {accepted}. "
+    "I'm going to ignore those files and read the rest of your message."
+)
 REJECTION_MULTIPLE_IMAGES = (
     "Sorry, I can only handle one image at a time. "
+    "Can you send me just the first one?"
+)
+REJECTION_MULTIPLE_FILES = (
+    "Sorry, I can only handle one file at a time. "
     "Can you send me just the first one?"
 )
 ERR_DOWNLOAD = (
@@ -46,12 +57,19 @@ ERR_DOWNLOAD = (
 ERR_TOO_LARGE_TEMPLATE = (
     "That image is too large for me to process (limit: {limit_mb} MB)."
 )
+ERR_FILE_TOO_LARGE_TEMPLATE = (
+    "That file is too large for me to process (limit: {limit_mb} MB)."
+)
 ERR_UNSUPPORTED_TYPE = (
     "I can't read that image format. "
     "Please send a PNG, JPEG, GIF, WebP, or HEIC."
 )
 ERR_GCS_UPLOAD = (
     "I had trouble saving your image. "
+    "Please try again in a minute."
+)
+ERR_GCS_UPLOAD_FILE = (
+    "I had trouble saving your file. "
     "Please try again in a minute."
 )
 ERR_STREAM_BROKEN = (
@@ -67,6 +85,67 @@ ERR_BROKEN_TOOL_TEMPLATE = (
     "I got stuck when I tried to {tool_name}. "
     "Could you tell the person that made me about this problem?"
 )
+
+# Friendly names for the rejection copy. Anything not listed falls back to
+# the MIME subtype, uppercased — "application/zip" reads as "ZIP".
+_MIME_LABELS = {
+    "image/jpeg": "JPEG",
+    "image/svg+xml": "SVG",
+    "application/pdf": "PDF",
+    "text/plain": "plain text",
+    "text/csv": "CSV",
+    "application/json": "JSON",
+}
+
+
+def normalize_mimetype(file_dict: dict) -> str:
+    """
+    Canonical MIME for a connector file dict.
+
+    Connectors vary: Slack passes the platform's mimetype through, Telegram
+    hardcodes image/jpeg for photos, Discord falls back to
+    application/octet-stream. Lowercased and stripped of any ';charset='
+    parameter so comparisons against a declared list behave.
+    """
+    raw = (file_dict.get("mimetype") or "").strip().lower()
+    return raw.split(";", 1)[0].strip()
+
+
+def accepted_file_types_for(agent) -> list[str]:
+    """
+    MIME types this agent can receive.
+
+    An agent that declares nothing gets the default image allowlist — the
+    behavior every agent had before the field existed. A non-empty
+    declaration REPLACES that default, so an agent wanting images alongside
+    documents must list the image types explicitly.
+    """
+    declared = getattr(agent, "accepted_file_types", None)
+    if declared:
+        return [t.strip().lower() for t in declared if t and t.strip()]
+    return list(get_settings().allowed_image_mime_types)
+
+
+def describe_accepted_types(accepted: list[str]) -> str:
+    """
+    Render an accepted-type list for a user-facing message.
+
+    Collapses the image types into the single word "images" — users think
+    in "images", not in six MIME rows.
+    """
+    labels = []
+    if any(t.startswith("image/") for t in accepted):
+        labels.append("images")
+    for mime in accepted:
+        if mime.startswith("image/"):
+            continue
+        labels.append(_MIME_LABELS.get(mime, mime.split("/")[-1].upper()))
+
+    if not labels:
+        return "typed words only"
+    if len(labels) == 1:
+        return labels[0]
+    return f"{', '.join(labels[:-1])}, and {labels[-1]}"
 ERR_TOOL_RATE_LIMITED_TEMPLATE = (
     "One of my tools ({tool_name}) hit a rate limit. You can try that action again, but if it keeps happening, please advise the person that made me of this issue so they can investigate. "
 )
@@ -199,20 +278,26 @@ class MessageProcessorV2:
                 space_id=event.space_id
             )
 
-            # Track whether any non-image files were dropped so we can
-            # tell the agent (otherwise it sees a request that the user
-            # phrased around a file they expected it to look at).
-            had_non_image_files = any(
-                not f.get("mimetype", "").startswith("image/")
+            # What this agent can actually read. Agents that declare nothing
+            # get the image allowlist, i.e. exactly their previous behavior.
+            accepted_types = accepted_file_types_for(agent)
+
+            # Track whether any files were dropped so we can tell the agent
+            # (otherwise it sees a request that the user phrased around a
+            # file they expected it to look at).
+            had_rejected_files = any(
+                normalize_mimetype(f) not in accepted_types
                 for f in event.files
             )
 
-            # Apply the single-image / non-image rules. If this returns False
-            # we've already messaged the user and should not call the agent.
+            # Apply the single-file / unreadable-type rules. If this returns
+            # False we've already messaged the user and should not call the
+            # agent.
             image_payload = await self._apply_file_rules(
                 event=event,
                 connector=connector,
                 conversation_id=conversation_id,
+                accepted_types=accepted_types,
             )
             if image_payload is False:
                 # False sentinel = hard reject (multi-image / failed intake):
@@ -228,12 +313,15 @@ class MessageProcessorV2:
 
             if image_payload:
                 if "gcs_uri" in image_payload:
-                    image_ref = (
-                        f"[IMAGE: {image_payload['gcs_uri']} | "
-                        f"{image_payload['mime_type']}]"
-                    )
+                    # Images keep the [IMAGE: …] token every deployed agent
+                    # already matches on. Anything else gets [FILE: …], so
+                    # widening the allowlist can never smuggle a PDF into an
+                    # agent's photo-analysis path (#15).
+                    mime = image_payload["mime_type"]
+                    token = "IMAGE" if mime.startswith("image/") else "FILE"
+                    image_ref = f"[{token}: {image_payload['gcs_uri']} | {mime}]"
                     message_text = f"{image_ref}\n\n{message_text}"
-                    logger.info("Embedded 1 image reference in message")
+                    logger.info(f"Embedded 1 {token.lower()} reference in message")
                 else:
                     # Base64 fallback (no GCS configured). There is nowhere to
                     # put the bytes: send_message() forwards only message /
@@ -244,9 +332,9 @@ class MessageProcessorV2:
                         "the agent input carries no base64 channel"
                     )
 
-            if had_non_image_files:
+            if had_rejected_files:
                 message_text = f"{NOTE_NON_IMAGE_FILES_DROPPED}\n\n{message_text}"
-                logger.info("Prepended non-image-files note to agent prompt")
+                logger.info("Prepended dropped-files note to agent prompt")
 
             session_id = await self._get_or_create_session(
                 user_id=user.id,
@@ -424,85 +512,120 @@ class MessageProcessorV2:
         event: PlatformEvent,
         connector: PlatformConnector,
         conversation_id: str,
+        accepted_types: Optional[list[str]] = None,
     ):
         """
-        Enforce the file-handling rules.
+        Enforce the file-handling rules for this agent's capability.
+
+        Which attachments count as readable is per-agent (#15): an agent
+        that declares nothing gets the image allowlist, so this behaves
+        exactly as it did before the capability field existed.
 
         Returns:
             - False if this is a hard reject: caller must NOT call the
               agent. The user has already been messaged. Triggered by
-              multi-image submissions OR by an image being attached but
-              failing intake (download / size / MIME / GCS).
-            - None if there is nothing image-related to forward and
-              proceeding to the agent with text only is correct. This
-              covers "no files" and "only non-image files" — in the
-              latter case the user has already received the non-image
-              rejection and the agent should still answer the text.
-            - dict with image payload (either {'gcs_uri','mime_type'} or
-              {'data','mime_type'} for base64 fallback) if a single image
-              is ready to forward. Caller embeds it in the prompt.
+              multi-file submissions OR by a readable file being attached
+              but failing intake (download / size / MIME / GCS).
+            - None if there is nothing to forward and proceeding to the
+              agent with text only is correct. This covers "no files" and
+              "only unreadable files" — in the latter case the user has
+              already received the rejection and the agent should still
+              answer the text.
+            - dict with the file payload (either {'gcs_uri','mime_type'} or
+              {'data','mime_type'} for base64 fallback) if a single
+              readable file is ready to forward.
         """
-        images = [
+        if accepted_types is None:
+            accepted_types = list(get_settings().allowed_image_mime_types)
+
+        readable = [
             f for f in event.files
-            if f.get("mimetype", "").startswith("image/")
+            if normalize_mimetype(f) in accepted_types
         ]
-        non_images = [
+        unreadable = [
             f for f in event.files
-            if not f.get("mimetype", "").startswith("image/")
+            if normalize_mimetype(f) not in accepted_types
         ]
-        is_multi_image = len(images) > 1 or event.media_group_id is not None
+        is_multi = len(readable) > 1 or event.media_group_id is not None
 
         # Rejection #1 always goes first if applicable.
-        if non_images:
+        if unreadable:
             logger.info(
-                f"Rejecting {len(non_images)} non-image file(s) "
-                f"(mimetypes: {[f.get('mimetype') for f in non_images]})"
+                f"Rejecting {len(unreadable)} unreadable file(s) "
+                f"(mimetypes: {[normalize_mimetype(f) for f in unreadable]}, "
+                f"accepted: {accepted_types})"
             )
             await connector.send_message(
                 recipient_id=conversation_id,
-                text=REJECTION_NON_IMAGE_FILES,
+                text=self._rejection_copy(accepted_types),
             )
 
         # Rejection #2: hard stop, no agent call.
-        if is_multi_image:
+        if is_multi:
             logger.info(
-                f"Rejecting multi-image submission "
-                f"(image_count={len(images)}, "
+                f"Rejecting multi-file submission "
+                f"(file_count={len(readable)}, "
                 f"media_group_id={event.media_group_id})"
+            )
+            all_images = all(
+                normalize_mimetype(f).startswith("image/") for f in readable
             )
             await connector.send_message(
                 recipient_id=conversation_id,
-                text=REJECTION_MULTIPLE_IMAGES,
+                text=(
+                    REJECTION_MULTIPLE_IMAGES
+                    if all_images
+                    else REJECTION_MULTIPLE_FILES
+                ),
             )
             return False
 
-        if not images:
+        if not readable:
             return None
 
-        result = await self._intake_single_image(
-            file_dict=images[0],
+        result = await self._intake_single_file(
+            file_dict=readable[0],
             connector=connector,
             conversation_id=conversation_id,
+            accepted_types=accepted_types,
         )
         if result is None:
-            # Image was attached but couldn't be processed. The user has
-            # already received a specific error message; calling the agent
-            # text-only would produce a confused reply ("you mentioned an
-            # image but I don't see it"), so we hard-reject instead.
+            # A readable file was attached but couldn't be processed. The
+            # user has already received a specific error message; calling
+            # the agent text-only would produce a confused reply ("you
+            # mentioned an image but I don't see it"), so we hard-reject.
             return False
         return result
 
-    async def _intake_single_image(
+    @staticmethod
+    def _rejection_copy(accepted_types: list[str]) -> str:
+        """
+        User-facing copy for an unreadable attachment.
+
+        Agents on the plain image default keep the exact wording they had
+        before this was per-agent; anything wider gets copy that names what
+        it can actually read, since "I can only accept typed words and
+        images" would be a lie for an agent that reads PDFs.
+        """
+        default_types = get_settings().allowed_image_mime_types
+        if sorted(accepted_types) == sorted(t.lower() for t in default_types):
+            return REJECTION_NON_IMAGE_FILES
+        return REJECTION_UNREADABLE_FILES_TEMPLATE.format(
+            accepted=describe_accepted_types(accepted_types)
+        )
+
+    async def _intake_single_file(
         self,
         file_dict: dict,
         connector: PlatformConnector,
         conversation_id: str,
+        accepted_types: Optional[list[str]] = None,
     ) -> Optional[dict]:
         """
-        Validate, download, and stage a single image for the agent.
+        Validate, download, and stage a single attachment for the agent.
 
         On any failure, sends a specific user-facing message and returns None
-        so the caller can continue without the image (or with a text-only
+        so the caller can continue without the file (or with a text-only
         fallback). On success, returns a dict ready to embed in the prompt.
 
         Validation order:
@@ -513,37 +636,54 @@ class MessageProcessorV2:
           5. GCS upload, or base64 fallback if GCS not configured.
         """
         settings = get_settings()
-        mimetype = file_dict.get("mimetype", "")
+        if accepted_types is None:
+            accepted_types = list(settings.allowed_image_mime_types)
+
+        mimetype = normalize_mimetype(file_dict)
         download_ref = file_dict.get("download_ref", "")
         size_hint = file_dict.get("size")
         filename = file_dict.get("name")
-        max_bytes = settings.max_image_size_mb * 1024 * 1024
+
+        # Images and documents are capped separately — a scanned multi-page
+        # invoice is legitimately larger than a photo.
+        is_image = mimetype.startswith("image/")
+        limit_mb = (
+            settings.max_image_size_mb if is_image else settings.max_document_size_mb
+        )
+        max_bytes = limit_mb * 1024 * 1024
+        too_large_copy = (
+            ERR_TOO_LARGE_TEMPLATE if is_image else ERR_FILE_TOO_LARGE_TEMPLATE
+        )
 
         # 1. MIME allowlist
-        if mimetype not in settings.allowed_image_mime_types:
-            logger.info(f"Rejecting unsupported image MIME type: {mimetype!r}")
+        if mimetype not in accepted_types:
+            logger.info(f"Rejecting unsupported MIME type: {mimetype!r}")
             await connector.send_message(
                 recipient_id=conversation_id,
-                text=ERR_UNSUPPORTED_TYPE,
+                text=(
+                    ERR_UNSUPPORTED_TYPE
+                    if is_image
+                    else self._rejection_copy(accepted_types)
+                ),
             )
             return None
 
         # 2. Pre-download size check (when size hint available)
         if isinstance(size_hint, int) and size_hint > max_bytes:
             logger.info(
-                f"Rejecting oversized image at metadata stage: "
-                f"{size_hint} bytes > {max_bytes} bytes"
+                f"Rejecting oversized file at metadata stage: "
+                f"{size_hint} bytes > {max_bytes} bytes (mimetype={mimetype})"
             )
             await connector.send_message(
                 recipient_id=conversation_id,
-                text=ERR_TOO_LARGE_TEMPLATE.format(limit_mb=settings.max_image_size_mb),
+                text=too_large_copy.format(limit_mb=limit_mb),
             )
             return None
 
         # 3. Download with one retry on transient failure
         if not download_ref:
             logger.warning(
-                f"Image has no download_ref; cannot fetch (mimetype={mimetype})"
+                f"File has no download_ref; cannot fetch (mimetype={mimetype})"
             )
             await connector.send_message(
                 recipient_id=conversation_id,
@@ -565,12 +705,12 @@ class MessageProcessorV2:
         # 4. Post-download size check
         if len(image_bytes) > max_bytes:
             logger.info(
-                f"Rejecting oversized image post-download: "
-                f"{len(image_bytes)} bytes > {max_bytes} bytes"
+                f"Rejecting oversized file post-download: "
+                f"{len(image_bytes)} bytes > {max_bytes} bytes (mimetype={mimetype})"
             )
             await connector.send_message(
                 recipient_id=conversation_id,
-                text=ERR_TOO_LARGE_TEMPLATE.format(limit_mb=settings.max_image_size_mb),
+                text=too_large_copy.format(limit_mb=limit_mb),
             )
             return None
 
@@ -586,13 +726,13 @@ class MessageProcessorV2:
                 logger.error(f"GCS upload failed: {e}")
                 await connector.send_message(
                     recipient_id=conversation_id,
-                    text=ERR_GCS_UPLOAD,
+                    text=ERR_GCS_UPLOAD if is_image else ERR_GCS_UPLOAD_FILE,
                 )
                 return None
 
             logger.info(
-                f"Uploaded image to GCS: {gcs_result['gcs_uri']} "
-                f"({len(image_bytes)} bytes)"
+                f"Uploaded file to GCS: {gcs_result['gcs_uri']} "
+                f"({len(image_bytes)} bytes, {mimetype})"
             )
             return {
                 "gcs_uri": gcs_result["gcs_uri"],

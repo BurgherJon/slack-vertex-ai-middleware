@@ -32,6 +32,14 @@
     <dt>Updated</dt>
     <dd>{{ engine.get('updateTime') or '—' }}</dd>
     {% endif %}
+    <dt>Accepted file types</dt>
+    <dd>
+      {% if agent.accepted_file_types %}
+        {% for mime in agent.accepted_file_types %}<code>{{ mime }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+      {% else %}
+        <span class="muted">Images only (no declaration)</span>
+      {% endif %}
+    </dd>
   </dl>
 </section>
 
