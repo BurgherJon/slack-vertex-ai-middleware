@@ -26,6 +26,7 @@ class FakeFirestoreService:
         self.sessions: dict[str, dict] = {}
         self.scheduled_jobs: dict[str, dict] = {}
         self.users: dict[str, dict] = {}
+        self.a2a_sessions: dict[str, str] = {}
 
     # ---- Test setup helpers (not on the real interface) ----
 
@@ -68,6 +69,23 @@ class FakeFirestoreService:
             if data.get("scheduler_api_key_hash") == key_hash:
                 return Agent(**data, id=agent_id)
         return None
+
+    async def get_agent_by_display_name(self, display_name: str) -> Optional[Agent]:
+        wanted = display_name.strip().lower()
+        if not wanted:
+            return None
+        for agent in await self.list_agents():
+            if agent.display_name.strip().lower() == wanted:
+                return agent
+        return None
+
+    # ---- A2A session methods ----
+
+    async def get_a2a_session(self, session_key: str) -> Optional[str]:
+        return self.a2a_sessions.get(session_key)
+
+    async def save_a2a_session(self, session_key: str, vertex_ai_session_id: str) -> None:
+        self.a2a_sessions[session_key] = vertex_ai_session_id
 
     # ---- Session methods (legacy slack-only and new user-based) ----
 

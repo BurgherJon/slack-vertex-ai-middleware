@@ -25,6 +25,7 @@ Build your own council of AI advisors. Deploy them to Slack, Google Chat, Telegr
 - **Cross-Platform Sessions**: Continue conversations across Slack, Google Chat, Telegram, and Discord
 - **Session Management**: Automatic session tracking per user+agent combination
 - **Scheduled Jobs**: Proactive agent-initiated messages with rate limiting
+- **Agent-to-Agent Communication**: Agents publish "inquiries" (things other agents can ping them about) and query each other through the Forum-hosted agents MCP server — with per-user attribution, so multi-user agents never mix up whose data is being discussed. Also great during development: attach Claude Code to `/api/v1/mcp/agents/` with an agent's MCP key to list attached agents, read their inquiry contracts, and send test queries from your terminal. See [docs/FOR_AGENT_DEVELOPERS.md](docs/FOR_AGENT_DEVELOPERS.md#agents-mcp-server-agent-to-agent-communication).
 - **Admin UI**: Optional Google-OAuth-gated operator console at `/admin` ([docs/ADMIN_UI.md](docs/ADMIN_UI.md))
 - **Async Processing**: Responds within 3 seconds, processes in background
 - **Infrastructure as Code**: Complete Terraform configuration

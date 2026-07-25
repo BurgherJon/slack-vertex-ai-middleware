@@ -154,3 +154,27 @@ async def test_pause_rejects_job_owned_by_another_agent(fake_firestore, request_
     )
     with pytest.raises(ValueError, match="not found"):
         await scheduler_mcp._handle_set_enabled({"job_id": other.id}, enabled=False)
+
+
+# ---- discord as an output platform ----
+
+
+async def test_create_with_discord_output_platform(fake_firestore, request_ctx):
+    await _seed_user(fake_firestore)
+    created = json.loads(
+        await scheduler_mcp._handle_create(
+            {
+                "name": "hydration nag",
+                "prompt": "drink water",
+                "schedule": "0 10 * * *",
+                "user_name": "alice.s",
+                "output_platform": "discord",
+            }
+        )
+    )
+    assert created["output_platform"] == "discord"
+
+
+def test_discord_is_in_create_tool_enum():
+    create_tool = next(t for t in scheduler_mcp.TOOLS if t.name == "create_scheduled_reminder")
+    assert "discord" in create_tool.inputSchema["properties"]["output_platform"]["enum"]

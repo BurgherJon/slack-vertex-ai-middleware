@@ -16,7 +16,7 @@ from starlette.routing import Mount
 
 from app.config import get_settings
 from app.api.v1 import routes as v1_routes
-from app.api.v1 import scheduler_mcp
+from app.api.v1 import agents_mcp, scheduler_mcp
 from app.core.dependencies import AdminAuthRequired
 from app.services.firestore_service import FirestoreService
 from app.services.vertex_ai_service import VertexAIService
@@ -101,12 +101,13 @@ async def lifespan(app: FastAPI):
 
     logger.info("Services initialized successfully")
 
-    # The MCP Streamable HTTP session manager has its own lifecycle — it
+    # The MCP Streamable HTTP session managers have their own lifecycle — each
     # spawns an anyio task group for in-flight requests and must be torn
-    # down when the app shuts down. Nesting its run() context here ensures
-    # the task group lives for the duration of the FastAPI lifespan.
+    # down when the app shuts down. Nesting their run() contexts here ensures
+    # the task groups live for the duration of the FastAPI lifespan.
     async with scheduler_mcp.session_manager.run():
-        yield
+        async with agents_mcp.session_manager.run():
+            yield
 
     # Shutdown
     logger.info("Shutting down application...")
@@ -133,11 +134,14 @@ def create_app() -> FastAPI:
     # Include API routers
     app.include_router(v1_routes.router, prefix=settings.api_v1_prefix)
 
-    # Mount the scheduler MCP server as a raw ASGI sub-app — the MCP Streamable
+    # Mount the MCP servers as raw ASGI sub-apps — the MCP Streamable
     # HTTP transport writes directly to the ASGI send() and doesn't fit
     # FastAPI's request/response model.
     app.routes.append(
         Mount(f"{settings.api_v1_prefix}/mcp/scheduler", app=scheduler_mcp.asgi_app)
+    )
+    app.routes.append(
+        Mount(f"{settings.api_v1_prefix}/mcp/agents", app=agents_mcp.asgi_app)
     )
 
     if settings.admin_ui_enabled:

@@ -6,6 +6,28 @@ from typing import Optional
 from pydantic import BaseModel, Field, model_validator
 
 
+class AgentInquiry(BaseModel):
+    """
+    One thing other agents can ping this agent about.
+
+    Inquiries are the agent's published request surface for agent-to-agent
+    communication: each names a question the agent knows how to field
+    (via the A2A MCP server's query_agent tool), with the request and
+    response formats callers should expect. Registered at deploy time by
+    the agent's register_agent.py from an inquiries.json in the agent repo.
+    """
+    name: str = Field(..., description="Short identifier, e.g. 'planned_workouts_today'")
+    description: str = Field(..., description="What the inquiry answers, for humans and calling LLMs")
+    request_format: Optional[str] = Field(
+        default=None,
+        description="What the caller should send, e.g. 'AGENT_QUERY: planned_workouts_today'"
+    )
+    response_format: Optional[str] = Field(
+        default=None,
+        description="The response shape callers can rely on"
+    )
+
+
 class AgentPlatformConfig(BaseModel):
     """
     Platform-specific configuration for an agent.
@@ -99,6 +121,17 @@ class Agent(BaseModel):
     id: Optional[str] = Field(default=None, description="Firestore document ID")
     vertex_ai_agent_id: str = Field(..., description="Vertex AI agent resource name")
     display_name: str = Field(..., description="Human-readable agent name")
+    description: Optional[str] = Field(
+        default=None,
+        description="What this agent does — shown to other agents via the A2A MCP list_agents tool"
+    )
+
+    # Agent-to-agent request surface: what other agents can ping this agent
+    # about. Registered at deploy time from the agent repo's inquiries.json.
+    inquiries: Optional[list[AgentInquiry]] = Field(
+        default=None,
+        description="Inquiries this agent can field from other agents"
+    )
 
     # Legacy Slack fields (for backward compatibility)
     slack_bot_token: Optional[str] = Field(default=None, description="[DEPRECATED] Use platforms instead")

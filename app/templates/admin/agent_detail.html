@@ -64,6 +64,39 @@
 </section>
 
 <section class="card">
+  <h2>Inquiries</h2>
+  <p class="muted small">
+    What other agents can ping this agent about via the A2A MCP server
+    (<code>/api/v1/mcp/agents/</code>). Registered at deploy time from the
+    agent repo's <code>inquiries.json</code>.
+  </p>
+  {% if agent.inquiries %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Description</th>
+        <th scope="col">Request format</th>
+        <th scope="col">Response format</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for inq in agent.inquiries %}
+      <tr>
+        <td><code>{{ inq.name }}</code></td>
+        <td>{{ inq.description }}</td>
+        <td>{% if inq.request_format %}<code class="small">{{ inq.request_format }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if inq.response_format %}<code class="small">{{ inq.response_format }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No inquiries published.</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>Last error</h2>
   {% if last_error %}
   <p class="muted small">
