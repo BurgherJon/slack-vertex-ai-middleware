@@ -151,6 +151,21 @@ class Agent(BaseModel):
         description="SHA-256 hex digest of the agent's scheduler MCP API key"
     )
 
+    # Inbound file capability. The Forum gates attachments on this before
+    # calling the agent, so an agent never receives a type it can't read.
+    #
+    # Empty/absent => the default image allowlist, which is exactly the
+    # behavior every agent had before this field existed.
+    #
+    # A non-empty list REPLACES that default rather than extending it: an
+    # agent declaring only ["application/pdf"] stops receiving images. If it
+    # wants both, it must list the image types too. Registered at deploy time
+    # from the agent repo (register_agent.py).
+    accepted_file_types: Optional[list[str]] = Field(
+        default=None,
+        description="MIME types this agent can read; empty means images only"
+    )
+
     model_config = {"frozen": False}  # Mutable for backward compat migration
 
     @model_validator(mode='after')

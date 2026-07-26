@@ -70,9 +70,14 @@ each is present only when it applies:
 
 | Order | Segment | When |
 |---|---|---|
-| 1 | `Note to Agent:  The user attempted to send you a file...` | A non-image attachment was dropped |
+| 1 | `Note to Agent:  The user attempted to send you a file...` | An attachment your agent can't read was dropped |
 | 2 | `[IMAGE: gs://… \| image/png]` | Exactly one image passed intake |
+| 2 | `[FILE: gs://… \| application/pdf]` | Exactly one non-image file passed intake |
 | 3 | `[From: <name>] [<time context>] <user's text>` | Always |
+
+`[IMAGE:` is reserved for image MIME types. Anything else arrives as
+`[FILE:`, so an agent that only matches `[IMAGE:` can never be handed a
+PDF by mistake.
 
 For scheduled jobs the prefix instead reads
 `[From: <name> | <platform>_id: <recipient>] <job prompt>`, and no image
@@ -117,10 +122,42 @@ to your agent **before** invoking you:
   specific error (download / size / unsupported MIME / GCS save) and the
   agent is **not** called.
 
-Your agent only ever sees: zero images plus text, or exactly one image
-referenced by a `[IMAGE: gs://… | mime]` token in the `message` string.
+Your agent only ever sees: text alone, or text plus exactly one readable
+file referenced by a single `[IMAGE: …]` or `[FILE: …]` token.
 
-### Reading an inbound image
+### Declaring which file types you accept
+
+Which attachments count as readable is **per-agent**. Your Firestore
+record carries an `accepted_file_types` list, written at deploy time by
+`register_agent.py`:
+
+```python
+"accepted_file_types": ["image/png", "image/jpeg", "application/pdf"]
+```
+
+| Declaration | What reaches your agent |
+|---|---|
+| absent / empty | The default image allowlist — PNG, JPEG, GIF, WebP, HEIC, HEIF |
+| `["application/pdf"]` | **PDFs only.** Images are now rejected |
+| `["image/png", "image/jpeg", "application/pdf"]` | Those three types |
+
+**Declaring anything replaces the default — it does not extend it.** If
+you want images *and* PDFs, list the image types explicitly. An agent
+that declares only `application/pdf` stops receiving photographs, which
+is rarely what you want for a receipt- or document-style agent, since
+users photograph documents as often as they attach them.
+
+The Forum enforces this before your agent is invoked, so you never
+receive a type you didn't declare, and the user gets an accurate
+rejection naming what you *can* read ("I can accept typed words, images,
+and PDF"). Agents that declare nothing keep the exact wording and
+behavior they had before this field existed.
+
+Non-image files are capped separately from images
+(`MAX_DOCUMENT_SIZE_MB`, default 20 MB), since a scanned multi-page
+invoice is legitimately larger than a photo.
+
+### Reading an inbound file
 
 The token gives you a `gs://` URI and a MIME type. Download the object
 and hand it to your model as an inline part — there is no base64 payload
@@ -130,10 +167,24 @@ in the request to fall back on:
 from google.cloud import storage
 from google.genai import types
 
-def view_image(gcs_uri: str, mime_type: str) -> types.Part:
+def read_file(gcs_uri: str, mime_type: str) -> types.Part:
     bucket_name, _, blob_name = gcs_uri.removeprefix("gs://").partition("/")
     data = storage.Client().bucket(bucket_name).blob(blob_name).download_as_bytes()
     return types.Part.from_bytes(data=data, mime_type=mime_type)
+```
+
+**Branch on the MIME type before you prompt.** Gemini will happily accept
+a PDF into a part built for a photo, then answer a photo question about a
+document and sound confident doing it. If your agent accepts more than
+images, key the prompt off `mime_type` rather than assuming what arrived:
+
+```python
+if mime_type.startswith("image/"):
+    prompt = "Analyze this photo…"      # your existing vision prompt
+elif mime_type == "application/pdf":
+    prompt = "Extract the line items from this document…"
+else:
+    return f"Error: I can't read {mime_type}."
 ```
 
 Two things to get right:

@@ -57,7 +57,11 @@ class Settings(BaseSettings):
         """Check if GCS file upload is configured."""
         return bool(self.gcs_bucket_name)
 
-    # Image intake limits
+    # File intake limits.
+    #
+    # allowed_image_mime_types is the *default* capability: it applies to
+    # every agent that declares no accepted_file_types of its own, which
+    # keeps pre-existing agents on exactly their old behavior.
     max_image_size_mb: int = 20
     allowed_image_mime_types: list[str] = [
         "image/png",
@@ -67,6 +71,11 @@ class Settings(BaseSettings):
         "image/heic",
         "image/heif",
     ]
+
+    # Non-image attachments (PDFs and the like) are capped separately —
+    # a scanned multi-page invoice is legitimately larger than a photo,
+    # and the two limits have no reason to move together.
+    max_document_size_mb: int = 20
 
     # API settings
     api_v1_prefix: str = "/api/v1"
