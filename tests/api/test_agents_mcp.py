@@ -180,6 +180,104 @@ async def test_query_agent_separate_sessions_per_user(fake_firestore, fake_verte
     )
 
 
+async def test_query_agent_recreates_session_when_engine_changed(
+    fake_firestore, fake_vertex, request_ctx
+):
+    """A cached session from before the target's redeploy is dead; the
+    lookup must detect the engine change and mint a fresh session (#18)."""
+    user_id = await _seed_user(fake_firestore)
+    fake_vertex.set_text_response(TARGET_VERTEX_ID, "ok")
+    key = agents_mcp._a2a_session_key("agent-nora", "agent-mickey", user_id)
+    fake_firestore.a2a_sessions[key] = {
+        "vertex_ai_session_id": "u:dead-session-on-old-engine",
+        "engine_id": "re-target-OLD",
+    }
+
+    await agents_mcp._handle_query_agent({
+        "agent_name": "Mickey Marathon",
+        "message": "hello",
+        "on_behalf_of": "Jonathan Cavell",
+    })
+
+    assert len(fake_vertex.sessions_created) == 1
+    assert fake_vertex.messages_sent[0]["session_id"] != "u:dead-session-on-old-engine"
+    assert fake_firestore.a2a_sessions[key]["engine_id"] == TARGET_VERTEX_ID
+
+
+async def test_query_agent_treats_legacy_entry_without_engine_as_stale(
+    fake_firestore, fake_vertex, request_ctx
+):
+    user_id = await _seed_user(fake_firestore)
+    fake_vertex.set_text_response(TARGET_VERTEX_ID, "ok")
+    key = agents_mcp._a2a_session_key("agent-nora", "agent-mickey", user_id)
+    fake_firestore.a2a_sessions[key] = {"vertex_ai_session_id": "u:legacy-session"}
+
+    await agents_mcp._handle_query_agent({
+        "agent_name": "Mickey Marathon",
+        "message": "hello",
+        "on_behalf_of": "Jonathan Cavell",
+    })
+
+    assert len(fake_vertex.sessions_created) == 1
+    assert fake_vertex.messages_sent[0]["session_id"] != "u:legacy-session"
+
+
+async def test_query_agent_retries_once_on_empty_reply_from_cached_session(
+    fake_firestore, fake_vertex, request_ctx
+):
+    """An empty reply on a cached session is what a server-side-dead session
+    looks like (SessionNotFound dies mid-stream as 0 chunks). The handler
+    must drop the session and retry once on a fresh one (#18)."""
+    user_id = await _seed_user(fake_firestore)
+    from app.services.vertex_ai_service import VertexAIResponse
+
+    key = agents_mcp._a2a_session_key("agent-nora", "agent-mickey", user_id)
+    fake_firestore.a2a_sessions[key] = {
+        "vertex_ai_session_id": "u:dead-but-engine-matches",
+        "engine_id": TARGET_VERTEX_ID,
+    }
+    fake_vertex.queue_response(TARGET_VERTEX_ID, VertexAIResponse(text="", chunk_count=0))
+    fake_vertex.queue_response(TARGET_VERTEX_ID, VertexAIResponse(text="recovered", chunk_count=1))
+
+    result = json.loads(
+        await agents_mcp._handle_query_agent({
+            "agent_name": "Mickey Marathon",
+            "message": "hello",
+            "on_behalf_of": "Jonathan Cavell",
+        })
+    )
+
+    assert result["reply"] == "recovered"
+    assert len(fake_vertex.messages_sent) == 2
+    assert fake_vertex.messages_sent[0]["session_id"] == "u:dead-but-engine-matches"
+    assert fake_vertex.messages_sent[1]["session_id"] != "u:dead-but-engine-matches"
+    assert len(fake_vertex.sessions_created) == 1
+    assert (
+        fake_firestore.a2a_sessions[key]["vertex_ai_session_id"]
+        == fake_vertex.sessions_created[0]["session_id"]
+    )
+
+
+async def test_query_agent_empty_reply_on_fresh_session_does_not_retry(
+    fake_firestore, fake_vertex, request_ctx
+):
+    """No cached session -> the empty reply is not a dead-session symptom;
+    fail loudly without a second call (no infinite fresh-session loops)."""
+    await _seed_user(fake_firestore)
+    from app.services.vertex_ai_service import VertexAIResponse
+
+    fake_vertex.set_response(TARGET_VERTEX_ID, VertexAIResponse(text="", chunk_count=0))
+
+    with pytest.raises(ValueError, match="empty reply"):
+        await agents_mcp._handle_query_agent({
+            "agent_name": "Mickey Marathon",
+            "message": "hello",
+            "on_behalf_of": "Jonathan Cavell",
+        })
+
+    assert len(fake_vertex.messages_sent) == 1
+
+
 async def test_query_agent_requires_known_user(fake_firestore, request_ctx):
     with pytest.raises(ValueError, match="No user found"):
         await agents_mcp._handle_query_agent({

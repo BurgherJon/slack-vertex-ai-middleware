@@ -16,6 +16,7 @@ class FakeVertexAIService:
     def __init__(self, default_response_text: str = "Echo response"):
         self.default_response_text = default_response_text
         self.canned_responses: dict[str, VertexAIResponse] = {}
+        self.response_queues: dict[str, list[VertexAIResponse]] = {}
         self.sessions_created: list[dict] = []
         self.messages_sent: list[dict] = []
 
@@ -25,6 +26,12 @@ class FakeVertexAIService:
 
     def set_text_response(self, agent_id: str, text: str) -> None:
         self.canned_responses[agent_id] = VertexAIResponse(text=text, chunk_count=1)
+
+    def queue_response(self, agent_id: str, response: VertexAIResponse) -> None:
+        """Queue a one-shot response; queued responses are served (in order)
+        before any canned response, letting tests script a sequence like
+        empty-then-success."""
+        self.response_queues.setdefault(agent_id, []).append(response)
 
     async def create_session(
         self, agent_id: str, user_name: Optional[str] = None
@@ -43,6 +50,9 @@ class FakeVertexAIService:
         self.messages_sent.append(
             {"agent_id": agent_id, "session_id": session_id, "message": message}
         )
+        queue = self.response_queues.get(agent_id)
+        if queue:
+            return queue.pop(0)
         if agent_id in self.canned_responses:
             return self.canned_responses[agent_id]
         return VertexAIResponse(text=self.default_response_text, chunk_count=1)

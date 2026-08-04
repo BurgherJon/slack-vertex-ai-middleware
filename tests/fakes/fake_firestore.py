@@ -27,7 +27,7 @@ class FakeFirestoreService:
         self.sessions: dict[str, dict] = {}
         self.scheduled_jobs: dict[str, dict] = {}
         self.users: dict[str, dict] = {}
-        self.a2a_sessions: dict[str, str] = {}
+        self.a2a_sessions: dict[str, dict] = {}
         # Set by tests to simulate a Firestore query failure (permissions,
         # transient error, missing index) on the scheduled_jobs collection.
         self.scheduled_jobs_query_error: Optional[Exception] = None
@@ -85,11 +85,19 @@ class FakeFirestoreService:
 
     # ---- A2A session methods ----
 
-    async def get_a2a_session(self, session_key: str) -> Optional[str]:
+    async def get_a2a_session(self, session_key: str) -> Optional[dict]:
         return self.a2a_sessions.get(session_key)
 
-    async def save_a2a_session(self, session_key: str, vertex_ai_session_id: str) -> None:
-        self.a2a_sessions[session_key] = vertex_ai_session_id
+    async def save_a2a_session(
+        self, session_key: str, vertex_ai_session_id: str, engine_id: str
+    ) -> None:
+        self.a2a_sessions[session_key] = {
+            "vertex_ai_session_id": vertex_ai_session_id,
+            "engine_id": engine_id,
+        }
+
+    async def delete_a2a_session(self, session_key: str) -> None:
+        self.a2a_sessions.pop(session_key, None)
 
     # ---- Session methods (legacy slack-only and new user-based) ----
 
