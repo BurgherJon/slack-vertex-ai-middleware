@@ -255,41 +255,58 @@ class FirestoreService:
         logger.warning(f"No agent found with display_name: {display_name}")
         return None
 
-    async def get_a2a_session(self, session_key: str) -> Optional[str]:
+    async def get_a2a_session(self, session_key: str) -> Optional[dict]:
         """
-        Get the stored Vertex AI session ID for an agent-to-agent conversation.
+        Get the stored entry for an agent-to-agent conversation.
 
         Args:
             session_key: Deterministic key for (caller agent, target agent,
                 on-behalf-of user) — see agents_mcp._a2a_session_key.
 
         Returns:
-            The combined Vertex AI session ID if one exists, None otherwise.
+            The stored entry ({"vertex_ai_session_id", "engine_id", ...}) if
+            one exists, None otherwise. Entries written before engine
+            tracking (#18) have no "engine_id" key; callers must treat that
+            as stale, since the session cannot be tied to a live engine.
         """
         try:
             doc = await self.client.collection(self.a2a_sessions_collection).document(session_key).get()
             if not doc.exists:
                 return None
-            return doc.to_dict().get("vertex_ai_session_id")
+            return doc.to_dict()
         except Exception as e:
             logger.error(f"Error fetching a2a session {session_key}: {e}")
             return None
 
-    async def save_a2a_session(self, session_key: str, vertex_ai_session_id: str) -> None:
+    async def save_a2a_session(
+        self, session_key: str, vertex_ai_session_id: str, engine_id: str
+    ) -> None:
         """
-        Persist the Vertex AI session ID for an agent-to-agent conversation.
+        Persist the Vertex AI session for an agent-to-agent conversation.
 
         Args:
             session_key: Deterministic key for (caller, target, user).
             vertex_ai_session_id: Combined session ID from VertexAIService.create_session.
+            engine_id: The target agent's engine resource name at creation
+                time. Sessions live on one engine, so this is what lets a
+                later lookup detect that the agent was redeployed and the
+                stored session is dead (#18).
         """
         try:
             await self.client.collection(self.a2a_sessions_collection).document(session_key).set({
                 "vertex_ai_session_id": vertex_ai_session_id,
+                "engine_id": engine_id,
                 "updated_at": datetime.now(UTC),
             })
         except Exception as e:
             logger.error(f"Error saving a2a session {session_key}: {e}")
+
+    async def delete_a2a_session(self, session_key: str) -> None:
+        """Drop a stored agent-to-agent session entry (e.g. it proved dead)."""
+        try:
+            await self.client.collection(self.a2a_sessions_collection).document(session_key).delete()
+        except Exception as e:
+            logger.error(f"Error deleting a2a session {session_key}: {e}")
 
     async def get_scheduled_job(self, job_id: str) -> Optional[ScheduledJob]:
         """

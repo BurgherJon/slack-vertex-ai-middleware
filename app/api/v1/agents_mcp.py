@@ -245,36 +245,73 @@ async def _handle_query_agent(args: dict[str, Any]) -> str:
     # One persistent conversation per (caller, target, user) — different
     # users' exchanges must never share history.
     session_key = _a2a_session_key(caller.id, target.id, user.id)
-    session_id = await firestore.get_a2a_session(session_key)
-    if not session_id:
+
+    async def _fresh_session() -> str:
         # The Vertex-session user id deliberately avoids ':' —
         # VertexAIService.send_message splits the combined id on the first colon.
-        session_id = await vertex_ai.create_session(
+        new_id = await vertex_ai.create_session(
             target.vertex_ai_agent_id,
             user_name=f"agent-{caller.id}-for-{user.id}",
         )
-        await firestore.save_a2a_session(session_key, session_id)
+        await firestore.save_a2a_session(
+            session_key, new_id, engine_id=target.vertex_ai_agent_id
+        )
+        return new_id
+
+    async def _query(session_id: str):
+        try:
+            return await asyncio.wait_for(
+                vertex_ai.send_message(
+                    agent_id=target.vertex_ai_agent_id,
+                    session_id=session_id,
+                    message=prefixed,
+                ),
+                timeout=QUERY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise ValueError(
+                f"{target.display_name} did not reply within {QUERY_TIMEOUT_SECONDS}s. "
+                f"Try again later."
+            )
 
     prefixed = (
         f"[From Agent: {caller.display_name} | On Behalf Of: {user.primary_name}] {message}"
     )
 
-    try:
-        response = await asyncio.wait_for(
-            vertex_ai.send_message(
-                agent_id=target.vertex_ai_agent_id,
-                session_id=session_id,
-                message=prefixed,
-            ),
-            timeout=QUERY_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        raise ValueError(
-            f"{target.display_name} did not reply within {QUERY_TIMEOUT_SECONDS}s. "
-            f"Try again later."
-        )
+    # Sessions live on one specific engine. If the target was redeployed
+    # since this entry was written, its engine changed and the stored
+    # session is dead — recreate instead of querying into a guaranteed
+    # failure. Entries without engine_id predate engine tracking and are
+    # treated the same way (#18).
+    entry = await firestore.get_a2a_session(session_key)
+    session_id = None
+    if entry:
+        if entry.get("engine_id") == target.vertex_ai_agent_id:
+            session_id = entry.get("vertex_ai_session_id")
+        else:
+            await firestore.delete_a2a_session(session_key)
+    used_cached_session = session_id is not None
+    if session_id is None:
+        session_id = await _fresh_session()
 
+    response = await _query(session_id)
     reply = (response.text or "").strip()
+
+    if not reply and used_cached_session:
+        # A dead session is indistinguishable from a genuinely empty reply:
+        # the engine's SessionNotFoundError dies mid-stream and reaches us
+        # as a cleanly-terminated stream with 0 chunks (#18). Since the
+        # cached session is the prime suspect, drop it and retry ONCE on a
+        # fresh one before declaring failure.
+        logger.warning(
+            f"Empty reply from {target.display_name} on cached A2A session "
+            f"{session_key}; recreating the session and retrying once"
+        )
+        await firestore.delete_a2a_session(session_key)
+        session_id = await _fresh_session()
+        response = await _query(session_id)
+        reply = (response.text or "").strip()
+
     if not reply:
         raise ValueError(
             f"{target.display_name} returned an empty reply "
