@@ -218,6 +218,12 @@ class FirestoreService:
             docs = await self.client.collection(self.agents_collection).get()
             agents = []
             for doc in docs:
+                # Underscore-prefixed docs are markers, not agents — e.g. the
+                # "_placeholder" doc the Firestore console forces you to create
+                # when making the collection. Skip them silently instead of
+                # emitting a multi-line validation warning on every listing.
+                if doc.id.startswith("_"):
+                    continue
                 try:
                     data = doc.to_dict()
                     agent = Agent(**data, id=doc.id)
