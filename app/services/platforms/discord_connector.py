@@ -105,17 +105,55 @@ class DiscordConnector(PlatformConnector):
 
     async def send_message(self, recipient_id: str, text: str) -> dict:
         """
-        Send a message to a Discord channel.
+        Send a message to a Discord channel, chunking long text.
+
+        Discord's hard limit is 2000 characters per message. Text longer
+        than the safe threshold is split into sequential messages —
+        preferring paragraph breaks, then line breaks, then sentence ends,
+        then a hard cut — so agents can produce long replies without the
+        API rejecting them (previously anything over the limit 400'd and
+        the user saw nothing).
 
         Args:
             recipient_id: Discord channel ID (for DMs, this is the DM
                 channel ID obtained from open_conversation, not the user ID)
-            text: Message text. Discord's hard limit is 2000 characters per
-                message; the caller should pre-chunk anything longer.
+            text: Message text of any length.
 
         Returns:
-            Discord API response dict
+            Discord API response dict for the LAST chunk sent.
         """
+        chunks = self._chunk_text(text)
+        result: dict = {}
+        for chunk in chunks:
+            result = await self._send_single(recipient_id, chunk)
+        return result
+
+    @staticmethod
+    def _chunk_text(text: str, limit: int = 1900) -> list:
+        """Split text into <=limit chunks at natural boundaries."""
+        text = text or ""
+        if len(text) <= limit:
+            return [text]
+        chunks = []
+        remaining = text
+        while len(remaining) > limit:
+            window = remaining[:limit]
+            cut = -1
+            for sep in ("\n\n", "\n", ". "):
+                cut = window.rfind(sep)
+                if cut > limit // 3:  # avoid absurdly small fragments
+                    cut += len(sep)
+                    break
+                cut = -1
+            if cut == -1:
+                cut = limit
+            chunks.append(remaining[:cut].rstrip())
+            remaining = remaining[cut:].lstrip()
+        if remaining:
+            chunks.append(remaining)
+        return chunks
+
+    async def _send_single(self, recipient_id: str, text: str) -> dict:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
